@@ -1,64 +1,81 @@
-# SO-ARM101 imitation learning with official LeRobot
+# SO-101 × SMOLVLA
 
-## HAMLET / GR00T N1.6 adapter
+SO-101 の模倣学習を、Hugging Face 公式 LeRobot と SMOLVLA で実行するための Docker wrapper です。
 
-指定された HAMLET 実装は `HAMLET-Isaac-GR00T/` に追加しました。既存の SO-101 LeRobot v3 データを GR00T 形式へ変換し、HAMLET の学習と安全な（アームを動かさない）推論を行えます。詳しい手順は [HAMLET-Isaac-GR00T/run_scripts/so101/README.md](HAMLET-Isaac-GR00T/run_scripts/so101/README.md) を参照してください。
+## 現在の対応状況
 
-このrepositoryは、Hugging Face公式LeRobotをDockerから呼び出すための薄いwrapperです。SO-101のdriver、`LeRobotDataset`、Diffusion Policy、training、rolloutはLeRobot公式実装を使用します。独自のrobot driver、Dataset class、policy実装は含めません。
+| 機能 | 状態 |
+| --- | --- |
+| LeRobot によるデバイス検出・設定・キャリブレーション | 使用対象 |
+| テレオペレーション・データ収録 | 使用対象 |
+| SMOLVLA の学習・offline評価・実機rollout | 現在の動作確認済みルート |
+| HAMLET / GR00T N1.6 | サブモジュールのみ。未検証・動作保証なし |
 
-現在の公式 `main` はPython 3.12以上を要求し、公式リポジトリでは `lerobot` 0.6.2 として管理されています。GPU環境では公式の夜間ビルドイメージ `huggingface/lerobot-gpu:latest` を使います。イメージの実際のバージョンは `./scripts/bootstrap.sh` の `lerobot-info` で確認してください。
+このリポジトリでは、SMOLVLA 以外の学習方式（Diffusion Policy、MolmoAct2）の wrapper は削除しています。HAMLET は調査用に残していますが、まだ動く前提で扱わないでください。
 
-公式参考資料:
+## 必要な環境
 
-- [LeRobot repository](https://github.com/huggingface/lerobot)
-- [Installation](https://huggingface.co/docs/lerobot/main/en/installation)
-- [SO-101](https://huggingface.co/docs/lerobot/main/en/so101)
-- [Imitation learning workflow](https://huggingface.co/docs/lerobot/main/en/il_robots)
-- [LeRobotDataset v3](https://huggingface.co/docs/lerobot/main/en/lerobot-dataset-v3)
-- [Policy deployment / `lerobot-rollout`](https://huggingface.co/docs/lerobot/main/en/inference)
+- Ubuntu
+- Docker Compose v2
+- NVIDIA Container Toolkit と CUDA 対応 GPU
+- SO-101 Leader / Follower
+- USB カメラ（現在の設定は1台）
+- Git
 
-## 1. Install / Docker
+Docker image は `huggingface/lerobot-gpu:latest` を使用します。LeRobot 本体をホスト側へインストールする必要はありません。
 
-前提は Ubuntu、Docker Compose v2、NVIDIA Container Toolkit、SO-101 arm、USB cameraです。GPU確認:
+## Clone
+
+サブモジュールを含めて clone します。
+
+```bash
+git clone --recurse-submodules <your-repository-url>
+cd SO101
+```
+
+既に clone 済みの場合は、次でサブモジュールを取得できます。
+
+```bash
+git submodule update --init --recursive
+```
+
+## 初期設定
+
+### 1. Docker と GPU の確認
 
 ```bash
 nvidia-smi
-docker info | grep -i runtime
-```
-
-公式GPUイメージを取得し、LeRobotとCUDAを確認します。
-
-```bash
+docker compose version
 ./scripts/bootstrap.sh
 ```
 
-このrepositoryの実験用データは `data/`、checkpointは `outputs/`、Hugging Face cacheは `~/.cache/huggingface` に保存されます。HF Hubへuploadする場合だけ、tokenをcontainer内で設定します。
+`bootstrap.sh` は公式 LeRobot GPU image を取得し、LeRobot と GPU がコンテナから見えるか確認します。
 
-wrapperはホストのUID/GIDをcontainerへ渡し、`HF_LEROBOT_HOME`をホストcacheへ対応付けます。そのためLeRobot公式のcalibration保存構造を維持したまま、`~/.cache/huggingface/lerobot/calibration/`へ書き込めます。
+### 2. ローカル設定を作成
 
 ```bash
-SO101_HOST_UID="$(id -u)" SO101_HOST_GID="$(id -g)" \
-  docker compose run --rm --service-ports \
-  --user "$(id -u):$(id -g)" lerobot hf auth login
+cp -n config/dataset.env config/dataset.local.env
 ```
 
-認証なしのlocal dataset作成だけなら `DATASET_PUSH_TO_HUB=false` のままで構いません。
+`config/dataset.local.env` は `.gitignore` 対象です。データセット名、保存先、学習ステップ数、W&B の設定など、PCごとに変わる値はこのファイルへ書きます。
 
-## 2. Device detection
+W&B を使う場合も API key は `config/dataset.local.env` にだけ設定してください。キーが空のまま `WANDB_ENABLE=true` の場合は、wrapper が online logging を自動的に無効化します。
 
-USBを接続した状態で、公式のport/camera finderを実行します。
+### 3. デバイス設定
+
+まず、SO-101 とカメラを接続して検出します。
 
 ```bash
 ./scripts/detect_devices.sh
 ```
 
-`lerobot-find-port` はarmを一台ずつ抜き差ししてLeader/Followerのportを特定します。`lerobot-find-cameras opencv` は対応するdevice、解像度、FPSを表示し、テスト画像を `outputs/captured_images/` に保存します。検出結果を `config/robot.env` に設定してください。
-
-設定例（値は検出結果で置き換えること）:
+検出結果を [config/robot.env](config/robot.env) に設定します。
 
 ```bash
 FOLLOWER_PORT="/dev/serial/by-id/<follower-id>"
 LEADER_PORT="/dev/serial/by-id/<leader-id>"
+FOLLOWER_ID="so101_follower"
+LEADER_ID="so101_leader"
 CAMERA_TOP_DEVICE="/dev/video1"
 CAMERA_WRIST_DEVICE=""
 CAMERA_WIDTH="640"
@@ -67,150 +84,81 @@ CAMERA_FPS="30"
 DISPLAY_DATA="false"
 ```
 
-`CAMERA_WRIST_DEVICE` を設定すると、wrapperは公式LeRobotへ `top` と `wrist` の2カメラ設定を渡します。カメラの名前はDatasetに保存されるため、学習時とrollout時で同じ名前・解像度・FPSにしてください。
+現在の SMOLVLA 設定は、データセットの `observation.images.top` を `camera1` へ rename します。カメラの feature 名を変更した場合は、`SMOLVLA_RENAME_MAP` も同じように変更してください。
 
-手首カメラしかない場合は、`CAMERA_TOP_DEVICE`を空にして`CAMERA_WRIST_DEVICE`だけ設定できます。その場合Datasetの画像キーは`observation.images.wrist`になります。SmolVLA用のrename mapも合わせて変更します。
+## SO-101 の準備
 
-```bash
-CAMERA_TOP_DEVICE=""
-CAMERA_WRIST_DEVICE="/dev/videoX"
-SMOLVLA_RENAME_MAP='{"observation.images.wrist":"observation.images.camera1"}'
-```
-
-## 3. Motor setup
-
-armの電源を入れ、各motor busへ接続して公式motor setupを実行します。
+次の順番で実行します。モーターが動く操作では、アームの周囲を空けてください。
 
 ```bash
+# モーターの初期設定（初回または必要時）
 ./scripts/setup_motors.sh
-```
 
-## 4. Calibration
-
-Leader/Followerをそれぞれ中間姿勢にしてから実行します。画面の公式手順に従って全jointを可動範囲へ動かします。
-
-```bash
+# Leader / Follower のキャリブレーション
 ./scripts/calibrate.sh
-```
 
-LeRobotが公式のcalibration保存場所へ保存します。`FOLLOWER_ID`、`LEADER_ID` はteleoperation、recording、rolloutで同じ値を使ってください。calibration fileの保存方式は変更していません。
-
-## 5. Teleoperation
-
-まずLeaderを動かし、Followerが追従することを確認します。`DISPLAY_DATA=true` にすると公式Rerun visualizationを有効化できます。画面表示が不要なら `false` のままで構いません。
-
-```bash
+# Leader で Follower が追従することを確認
 ./scripts/teleop.sh
 ```
 
-## 6. Dataset recording
+## データセット収録
 
-`config/dataset.env` を必要に応じて編集します。現在の設定は1 camera、640x480、30 FPS、10 episode、15秒/episodeです。
+`config/dataset.local.env` の次の値を確認してから収録します。
+
+```bash
+DATASET_REPO_ID="your-hf-user/so101_task"
+DATASET_ROOT="data/so101_task"
+DATASET_TASK="Describe the task here."
+DATASET_NUM_EPISODES="10"
+DATASET_FPS="30"
+```
 
 ```bash
 ./scripts/record.sh
 ```
 
-recording中の公式keyboard操作:
+データは `data/` に LeRobotDataset v3 として保存されます。 `data/` は Git 管理外です。
 
-- Right Arrow / `n`: episodeを保存して次へ
-- Left Arrow / `r`: episodeを破棄して取り直し
-- Escape / `q`: recordingを停止して保存
-
-データは独自HDF5/pickle/npzへ変換せず、公式LeRobotDataset v3として `DATASET_ROOT` に保存されます。Hubへuploadする場合は先に `hf auth login` を行い、`config/dataset.env` または `config/dataset.local.env` で `DATASET_PUSH_TO_HUB=true` にします。
-
-`DATASET_REPO_ID` は例えば `my-user/so101_5eps` のように設定します。現行LeRobotのrecordingは指定repo idへ時刻suffixを自動付与するため、このwrapperでは公式の `--dataset.no_stamp=true` を指定し、local学習時のrepo idを安定させています。
-
-## 7. Dataset visualization / verification
-
-公式LeRobotDataset APIでepisode数、frame数、FPS、state/action/image featureを確認します。
+収録後の確認:
 
 ```bash
 ./scripts/inspect_dataset.sh
-```
-
-公式viewerでepisode 0を開きます。
-
-```bash
 ./scripts/visualize_dataset.sh 0
 ```
 
-Hubへuploadした場合は、公式visualize_dataset Spaceへdataset repo idを入力して確認することもできます。
+## SMOLVLA 学習
 
-## 8. MolmoAct2 training（TOP camera only）
-
-TOPカメラ1台でMolmoAct2を使う場合は、公式の元checkpoint
-`allenai/MolmoAct2-SO100_101`を`policy.checkpoint_path`で読み込み、現在のDatasetから
-`observation.images.top`だけを入力にしてfine-tuneします。公式の変換済み
-`lerobot/MolmoAct2-SO100_101-LeRobot`は`cam0`と`cam1`を想定するため、TOP 1台構成では直接使いません。
-
-現行のSO-101 calibration conventionと元checkpointの差分を補正するため、wrapperには公式ドキュメントの
-`joint_signs` / `joint_offsets`を設定済みです。12GB GPU向けに、初期設定はBF16、VLM freeze、batch 1、gradient checkpointingです。
-最初は次のコマンドで短い動作確認を行い、OOMが出ないことを確認してから`MOLMOACT2_STEPS`を増やしてください。
-
-```bash
-./scripts/train_molmoact2.sh
-```
-
-学習済みcheckpointで実機rolloutします。最初はロボット周辺を空け、durationを短くしてください。
-
-```bash
-./scripts/rollout_molmoact2.sh
-```
-
-設定は`config/dataset.env`またはgit管理外の`config/dataset.local.env`で変更できます。
-MolmoAct2は5Bモデルで、公式モデルカードでもSO-100/101用のfine-tuning/inference checkpointとして説明されています。
-1カメラfine-tuningは2カメラの元学習条件と異なるため、性能を上げるには将来2台目のカメラを追加するのが推奨です。
-
-## 9. SmolVLA training（wrist camera only）
-
-手首カメラ1台だけなら、現時点ではSmolVLAを優先します。公式`lerobot/smolvla_base`は約450Mのbase modelで、SO-101の6軸state/actionとLeRobotDatasetをそのまま使えます。
-base checkpointは3つの画像slotを持つため、wrapperは公式の`empty_cameras=2`で未接続の2 slotをmaskし、現在のDatasetの`observation.images.top`を`camera1`へrenameします。物理的に手首に付いたカメラでも、Dataset上のキー名は入力mappingで吸収できます。
+現時点で動作確認済みの学習コマンドです。
 
 ```bash
 ./scripts/train_smolvla.sh
 ```
 
-最初の動作確認だけ行う場合は、`config/dataset.local.env`に次を追加してください。
+デフォルトでは次の設定です。
+
+- base model: `lerobot/smolvla_base`
+- batch size: `4`
+- steps: `20000`
+- GPU: `cuda`
+- 出力先: `outputs/train/smolvla_so101_wrist_20k_v1/`
+
+短い smoke test を行う場合は、`config/dataset.local.env` に追加・上書きします。
 
 ```bash
 SMOLVLA_STEPS="100"
-SMOLVLA_OUTPUT_DIR="outputs/train/smolvla_so101_wrist_smoke"
+SMOLVLA_OUTPUT_DIR="outputs/train/smolvla_smoke"
+SMOLVLA_JOB_NAME="smolvla_smoke"
 ```
 
-学習後の実機rollout:
+## SMOLVLA offline 評価
 
-```bash
-./scripts/rollout_smolvla.sh
-```
-
-### SmolVLA open-loop evaluation video
-
-学習済みcheckpointを記録済みLeRobotDatasetのheld-out episodeへ入力し、ロボットへactionを送らずにGT、予測action、絶対誤差を確認します。既定では最後の20%（現在の10 episodeならepisode 8, 9）を評価します。
+評価対象はデータセットの最後の `DATASET_EVAL_SPLIT`（デフォルト20%）です。ロボットには action を送信しません。
 
 ```bash
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
-出力:
-
-```text
-outputs/eval/smolvla_so101_wrist_20k_open_loop/
-├── episode_008_gt_pred_error.mp4
-├── episode_009_gt_pred_error.mp4
-├── episode_008_angle_graph.png
-├── episode_009_angle_graph.png
-├── action_comparison.csv
-└── summary.json
-```
-
-動画は左に記録画像、右に6 jointそれぞれの「時間-角度」グラフを表示します。各グラフの上段は`GT`と`Pred`、下段は`|GT-Pred|`の絶対誤差です。PNGはepisode全体を静止画で確認するための同じグラフです。既定の`fresh` modeは各フレームで公式`predict_action_chunk`を呼び、chunk先頭actionを比較します。実機rolloutと同じaction queue挙動を確認する場合は次を使います。
-
-```bash
-SMOLVLA_OPEN_LOOP_ACTION_MODE=rollout ./scripts/evaluate_smolvla_open_loop.sh
-```
-
-episodeやフレーム数を限定したテスト:
+出力先は `outputs/eval/smolvla_so101_wrist_20k_open_loop/` です。テスト時は次のように対象 episode やフレーム数を制限できます。
 
 ```bash
 SMOLVLA_OPEN_LOOP_EPISODES=8 \
@@ -218,65 +166,62 @@ SMOLVLA_OPEN_LOOP_MAX_FRAMES=100 \
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
-Hugging Face公式はSmolVLAで約50 episodeを開始点として推奨しています。現在の10 episodeはCLI・checkpoint生成確認用で、性能評価用には追加収録してください。
+## 実機 rollout
 
-## 10. Diffusion Policy training
-
-公式LeRobotの `--policy.type=diffusion` を使います。現在の設定は、SO-101データからの20,000-step学習、batch size 2、CUDAです。
+学習済み checkpoint のパスを `config/dataset.local.env` の `SMOLVLA_POLICY_PATH` に設定します。
 
 ```bash
-./scripts/train_diffusion.sh
+SMOLVLA_POLICY_PATH="outputs/train/smolvla_smoke/checkpoints/last/pretrained_model"
+SMOLVLA_ROLLOUT_DURATION="10"
 ```
 
-現在の出力先は次です。
+最初はアームの周囲を完全に空け、短い duration で実行してください。
+
+```bash
+./scripts/rollout_smolvla.sh
+```
+
+## HAMLET / GR00T N1.6
+
+`HAMLET-Isaac-GR00T/` は独立したサブモジュールです。現時点では動作確認できていないため、このルートの SMOLVLA 手順と混同しないでください。
+
+```bash
+git -C HAMLET-Isaac-GR00T status
+```
+
+HAMLET 側の手順や依存関係は、サブモジュール内の README とそのリポジトリの状態を確認してください。親リポジトリの `git` が参照するのはサブモジュールの commit だけで、サブモジュール内の未コミット変更は含まれません。
+
+## ディレクトリ構成
 
 ```text
-outputs/train/diffusion_so101_from_scratch_20k_v1/checkpoints/last/pretrained_model
+SO101/
+├── config/
+│   ├── dataset.env          # Git管理する基本設定・秘密情報なし
+│   ├── dataset.local.env    # ローカル上書き（Git管理外）
+│   └── robot.env            # SO-101 / カメラ設定
+├── scripts/                 # Docker経由の実行 wrapper
+├── .lerobot-src/            # 公式 LeRobot の submodule
+├── HAMLET-Isaac-GR00T/      # 未検証の HAMLET submodule
+├── data/                    # データセット（Git管理外）
+└── outputs/                 # checkpoint・評価結果（Git管理外）
 ```
 
-学習前後のopen-loop評価は、最後の20%（2 episodes）をheld-outにして、公式LeRobotの`eval_loss`で表示します。
+## Git へ push する場合
+
+`data/`、`outputs/`、キャッシュ、ローカル設定は `.gitignore` で除外されています。設定とソースを確認してから commit してください。
 
 ```bash
-./scripts/evaluate_open_loop.sh  # 未学習ベースライン
-./scripts/train_diffusion.sh     # 学習後のeval_lossも表示
+git status
+git add .
+git commit -m "Add SO-101 SMOLVLA workflow"
+git push -u origin HEAD
 ```
 
-Weights & Biasesは`WANDB_ENABLE=true`、projectは`lerobot-so101`です。キーは`config/dataset.local.env`（git管理外）へ置いてください。今回表示されたキーは漏えい扱いにして、W&Bでrevokeしてから新しいキーを設定してください。
-キー未設定で`WANDB_ENABLE=true`の場合、wrapperはオンラインW&Bを自動的に無効化して学習を継続します。オンライン記録を使う場合だけ、新しいキーを`config/dataset.local.env`へ設定してください。
+サブモジュール内に変更がある場合は、先にサブモジュール側で commit・push し、その後に親リポジトリで gitlink を更新します。
 
-設定を変える場合は `config/dataset.local.env` を作って上書きします（このファイルはgit管理外です）。例えば:
+## 公式ドキュメント
 
-```bash
-cp config/dataset.env config/dataset.local.env
-```
-
-`config/dataset.local.env` で `DIFFUSION_STEPS=50000`、`DIFFUSION_BATCH_SIZE=4` などを設定し、`DIFFUSION_OUTPUT_DIR`を既存runと分けて再度 `./scripts/train_diffusion.sh` を実行します。
-
-### Hubのpretrained policyについて
-
-`DIFFUSION_PRETRAINED_PATH`には、LeRobot Diffusion Policyとして保存され、現在のDatasetと同じstate/action/camera featureを持つHub repo id（例: `org/compatible-diffusion-policy`）またはローカル`pretrained_model`を指定できます。`--policy.path`は公式CLIにそのまま渡されます。
-
-ただし、`lerobot/diffusion_pusht`はPushTシミュレータ用でSO-101とは入出力が異なり、`lerobot/MolmoAct2-SO100_101-LeRobot`は大規模なSO-100/101向けモデルですがDiffusion Policyではありません。これらをDiffusionの初期重みとして指定しないでください。互換性のあるモデルが見つかった場合だけ、`config/dataset.local.env`で次のように指定します。
-
-```bash
-DIFFUSION_PRETRAINED_PATH="org/compatible-diffusion-policy"
-```
-
-Hubへpolicyをuploadする場合は、`POLICY_PUSH_TO_HUB=true` と `POLICY_REPO_ID="my-user/so101_diffusion"` を設定します。今回の学習はローカル保存のみです。
-
-## 11. Robot rollout
-
-`POLICY_PATH` を生成されたcheckpoint、またはHub上のpolicyへ設定します。まずはrobot周辺を空け、短いdurationで実行してください。
-
-```bash
-./scripts/rollout_diffusion.sh
-```
-
-このwrapperは公式 `lerobot-rollout --strategy.type=base --inference.type=sync` を呼び出します。rollout時のcamera設定はtraining datasetと同じでなければなりません。停止時はduration終了を待つか、LeRobotの公式終了操作を使ってください。
-
-## Reproducibility and scope
-
-- Docker imageは公式 `huggingface/lerobot-gpu:latest`。更新時は `./scripts/bootstrap.sh` の `lerobot-info` と `docker image inspect huggingface/lerobot-gpu:latest` で実際のimage digest/versionを記録してください。
-- `docker-compose.yml` はGPU、USB serial、V4L2 camera、HF cache、dataset、outputsだけを実験用に接続します。
-- SO-101制御、calibration、teleoperation、dataset、Diffusion Policy、rolloutは全てLeRobot公式CLIに委譲しています。
-- ACTへ切り替える場合は、train wrapperの `--policy.type=diffusion` と出力先を公式 `--policy.type=act` 用に変更するだけで、Dataset形式は維持できます。
+- [LeRobot repository](https://github.com/huggingface/lerobot)
+- [LeRobot installation](https://huggingface.co/docs/lerobot/main/en/installation)
+- [SO-101](https://huggingface.co/docs/lerobot/main/en/so101)
+- [SmolVLA](https://huggingface.co/docs/lerobot/main/en/smolvla)
