@@ -113,6 +113,17 @@ DATASET_NUM_EPISODES="10"
 DATASET_FPS="30"
 ```
 
+収録が完了すると、データセットは自動的にHugging Faceへアップロードされます。
+`config/dataset.local.env` に、書き込み権限のあるトークンを設定してください。
+
+```bash
+HF_TOKEN="hf_..."
+```
+
+`HF_TOKEN` を設定しない場合は、事前に `hf auth login` でログインしておけば、既存のHugging Faceログイン情報も利用できます。
+`DATASET_PUSH_TO_HUB="false"` に変更すると自動アップロードを無効化できます。
+データセットはデフォルトで非公開（`DATASET_PRIVATE="true"`）です。
+
 ```bash
 ./scripts/record.sh
 ```
@@ -125,6 +136,22 @@ DATASET_FPS="30"
 ./scripts/inspect_dataset.sh
 ./scripts/visualize_dataset.sh 0
 ```
+
+### 既存データセットのアップロード
+
+すでに `data/` に保存されているLeRobotデータセットは、次のコマンドでアップロードできます。デフォルトでは `config/dataset.local.env` の `DATASET_ROOT` と `DATASET_REPO_ID` を使用します。
+
+```bash
+./scripts/upload_dataset.sh
+```
+
+別のデータセットを指定する場合:
+
+```bash
+./scripts/upload_dataset.sh data/another_dataset your-hf-user/another_dataset
+```
+
+メタデータ、Parquet、動画、Dataset Cardをまとめてアップロードします。Hugging Faceの書き込み権限を持つ `HF_TOKEN` を `config/dataset.local.env` に設定するか、事前に `hf auth login` を実行してください。
 
 ## SMOLVLA 学習
 

@@ -29,6 +29,14 @@ if [[ -n "${WANDB_API_KEY:-}" ]]; then
   export WANDB_API_KEY
 fi
 
+# Pass Hugging Face authentication to the container without putting the token
+# itself in a command-line argument. The token is normally kept in the
+# git-ignored config/dataset.local.env; a mounted Hugging Face login cache also
+# remains supported when HF_TOKEN is empty.
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export HF_TOKEN
+fi
+
 # Avoid an interactive W&B login failure when a local smoke run has no key.
 # If an API key is supplied (normally through config/dataset.local.env), the
 # requested online logging remains enabled.
@@ -92,6 +100,9 @@ run_lerobot() {
   local passthrough_env=()
   if [[ -n "${WANDB_API_KEY:-}" ]]; then
     passthrough_env+=(--env WANDB_API_KEY)
+  fi
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    passthrough_env+=(--env HF_TOKEN)
   fi
   docker compose -f "$COMPOSE_FILE" run --rm --service-ports \
     "${passthrough_env[@]}" \
