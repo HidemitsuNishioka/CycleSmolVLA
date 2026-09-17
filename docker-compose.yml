@@ -1,0 +1,51 @@
+services:
+  lerobot:
+    image: ${LEROBOT_IMAGE:-huggingface/lerobot-gpu:latest}
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    gpus: all
+    shm_size: "16gb"
+    group_add:
+      # Host defaults are the usual Ubuntu values. The wrapper scripts export
+      # the actual host GIDs when available, so this also works on custom hosts.
+      - "${VIDEO_GID:-44}"
+      - "${DIALOUT_GID:-20}"
+
+    # LeRobot's official Docker README documents exposing /dev for USB robots
+    # and cameras. This keeps device detection and hot-plugging usable without
+    # baking a host-specific /dev/ttyACM* or /dev/video* into this repository.
+    privileged: true
+
+    environment:
+      HOME: /workspace
+      USER: so101
+      LOGNAME: so101
+      USERNAME: so101
+      XDG_CACHE_HOME: /workspace/.cache
+      # Keep the host cache locations unchanged, but mount them under the
+      # writable workspace because wrapper runs use the host UID/GID.
+      HF_HOME: /workspace/.cache/huggingface
+      HF_LEROBOT_HOME: /workspace/.cache/huggingface/lerobot
+      # The host Hugging Face cache may have been created by an earlier
+      # root-owned container. Keep dataset index/lock files in the writable
+      # project output tree while retaining the existing Hub cache.
+      HF_DATASETS_CACHE: /workspace/outputs/cache/huggingface/datasets
+      MPLCONFIGDIR: /workspace/outputs/cache/matplotlib
+      TORCH_HOME: /workspace/.cache/torch
+      TORCHINDUCTOR_CACHE_DIR: /workspace/.cache/torch/inductor
+      TRITON_CACHE_DIR: /workspace/.cache/triton
+      # Keep W&B's runtime files in the user-writable project output tree.
+      WANDB_DIR: /workspace/outputs/wandb
+      WANDB_CACHE_DIR: /workspace/outputs/wandb/cache
+      WANDB_CONFIG_DIR: /workspace/outputs/wandb/config
+      NVIDIA_DRIVER_CAPABILITIES: all
+      DISPLAY: ${DISPLAY:-}
+
+    volumes:
+      - .:/workspace
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - ${HOME}/.cache/huggingface:/workspace/.cache/huggingface
+      - ${HOME}/.cache/torch:/workspace/.cache/torch
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
