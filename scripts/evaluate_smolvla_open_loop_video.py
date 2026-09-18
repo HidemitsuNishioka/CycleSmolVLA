@@ -23,8 +23,10 @@ import torch
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.smolvla.cyclemanip import cycle_progress_targets
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
 
@@ -242,10 +244,29 @@ def main() -> None:
 
     print(f"Loading official SmolVLAPolicy from {checkpoint}")
     policy = SmolVLAPolicy.from_pretrained(str(checkpoint)).to(device).eval()
+    rename_map = {}
+    if policy.config.image_features:
+        policy_image_key = next(iter(policy.config.image_features))
+        if image_key != policy_image_key:
+            rename_map[image_key] = policy_image_key
+    delta_timestamps = resolve_delta_timestamps(policy.config, dataset.meta, rename_map)
+    if delta_timestamps is not None:
+        dataset = LeRobotDataset(
+            args.dataset_repo_id,
+            root=args.dataset_root,
+            delta_timestamps=delta_timestamps,
+        )
+        print(
+            f"Cycle history enabled: {getattr(policy.config, 'cycle_enabled', False)}; "
+            f"delta features: {sorted(delta_timestamps)}"
+        )
     preprocessor, postprocessor = make_pre_post_processors(
         policy.config,
         str(checkpoint),
-        preprocessor_overrides={"device_processor": {"device": str(device)}},
+        preprocessor_overrides={
+            "device_processor": {"device": str(device)},
+            "rename_observations_processor": {"rename_map": rename_map},
+        },
     )
 
     csv_path = output_dir / "action_comparison.csv"
@@ -257,9 +278,13 @@ def main() -> None:
         *[f"gt_{name}" for name in JOINT_NAMES],
         *[f"pred_{name}" for name in JOINT_NAMES],
         *[f"abs_error_{name}" for name in JOINT_NAMES],
+        "cycle_progress_target",
+        "cycle_progress_prediction",
     ]
     all_gt: list[np.ndarray] = []
     all_pred: list[np.ndarray] = []
+    all_progress_targets: list[int] = []
+    all_progress_predictions: list[int] = []
     episode_summaries = []
 
     with csv_path.open("w", newline="") as csv_file:
@@ -302,8 +327,33 @@ def main() -> None:
                     "observation.state": sample["observation.state"],
                     "task": sample["task"],
                 }
+                for metadata_key in (
+                    f"{image_key}_is_pad",
+                    f"{image_key}_padding_mask",
+                    "observation.state_is_pad",
+                    "frame_index",
+                    "episode_index",
+                ):
+                    if metadata_key in sample:
+                        raw_observation[metadata_key] = sample[metadata_key]
                 processed = preprocessor(raw_observation)
                 with torch.inference_mode():
+                    progress_target = None
+                    progress_prediction = None
+                    progress_logits = policy.predict_cycle_progress(processed)
+                    if progress_logits is not None:
+                        progress_target = int(
+                            cycle_progress_targets(
+                                torch.as_tensor(sample["frame_index"]),
+                                torch.as_tensor(sample["episode_index"]),
+                                policy.config.cycle_episode_lengths,
+                                policy.config.cycle_progress_bins,
+                                policy.config.cycle_progress_fallback_length,
+                            )[0]
+                        )
+                        progress_prediction = int(progress_logits.argmax(dim=-1)[0].item())
+                        all_progress_targets.append(progress_target)
+                        all_progress_predictions.append(progress_prediction)
                     if args.action_mode == "fresh":
                         action_chunk = policy.predict_action_chunk(processed)
                         predicted = action_chunk[:, 0]
@@ -311,7 +361,10 @@ def main() -> None:
                         predicted = policy.select_action(processed)
                     predicted = postprocessor(predicted)
 
-                gt = sample["action"].detach().float().cpu().reshape(-1).numpy()
+                gt_tensor = sample["action"]
+                if gt_tensor.ndim > 1:
+                    gt_tensor = gt_tensor[0]
+                gt = gt_tensor.detach().float().cpu().reshape(-1).numpy()
                 pred = predicted.detach().float().cpu().reshape(-1).numpy()
                 if gt.shape[0] != len(JOINT_NAMES) or pred.shape[0] != len(JOINT_NAMES):
                     raise ValueError(f"Expected 6 action values, got GT={gt.shape} prediction={pred.shape}")
@@ -330,6 +383,8 @@ def main() -> None:
                 row.update({f"gt_{name}": float(value) for name, value in zip(JOINT_NAMES, gt)})
                 row.update({f"pred_{name}": float(value) for name, value in zip(JOINT_NAMES, pred)})
                 row.update({f"abs_error_{name}": float(value) for name, value in zip(JOINT_NAMES, error)})
+                row["cycle_progress_target"] = progress_target
+                row["cycle_progress_prediction"] = progress_prediction
                 writer.writerow(row)
 
                 running_errors = np.abs(np.asarray(episode_pred) - np.asarray(episode_gt))
@@ -387,6 +442,11 @@ def main() -> None:
             name: float(value) for name, value in zip(JOINT_NAMES, np.sqrt(np.square(error_all).mean(axis=0)))
         },
         "episode_summaries": episode_summaries,
+        "cycle_progress_accuracy": (
+            float(np.mean(np.asarray(all_progress_targets) == np.asarray(all_progress_predictions)))
+            if all_progress_targets
+            else None
+        ),
         "csv": str(csv_path),
     }
     summary_path = output_dir / "summary.json"

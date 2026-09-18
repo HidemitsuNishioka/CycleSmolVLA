@@ -161,6 +161,14 @@ HF_TOKEN="hf_..."
 ./scripts/train_smolvla.sh
 ```
 
+既定では、CycleManip論文に基づく履歴認識を有効にしています。各時刻で画像を6フレーム、関節状態を過去32フレーム読み込み、行動損失に10段階の進捗分類損失（重み0.1）を加えます。無効にする場合は、`config/dataset.local.env`で次を設定します。
+
+```bash
+SMOLVLA_CYCLE_ENABLED="false"
+```
+
+論文の実装が公開されていないため、CycleManipの論文と公開READMEに記載された仕様（高コストな画像の疎な履歴、低コストな状態の密な履歴、進捗の補助分類）を、LeRobotの時系列データローダとSmolVLAの条件トークンへ移植しています。
+
 デフォルトでは次の設定です。
 
 - base model: `lerobot/smolvla_base`
