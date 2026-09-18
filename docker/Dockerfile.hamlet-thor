@@ -1,0 +1,71 @@
+# The official CUDA base is small enough for Jetson. The GPU-native Python
+# wheels below come from NVIDIA's Jetson AI Lab sbsa/cu130 index.
+FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    HF_HOME=/workspace/.cache/huggingface \
+    TRANSFORMERS_CACHE=/workspace/.cache/huggingface \
+    PATH=/opt/venv/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git ffmpeg libgl1 libglib2.0-0 python3 python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Isolate the environment from the host and install the aarch64 Thor wheels
+# explicitly. These are not generic PyPI ARM wheels.
+RUN python3 -m venv "$VIRTUAL_ENV" \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install \
+      https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/e65/21b6628938478/torch-2.9.1-cp312-cp312-linux_aarch64.whl \
+      https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/8f2/e9fbe624d27f2/torchvision-0.24.1-cp312-cp312-linux_aarch64.whl \
+      https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/968/29c4f038c9bbd/triton-3.5.0-cp312-cp312-linux_aarch64.whl
+
+# Install HAMLET's Python-level dependencies without allowing pip to replace
+# the GPU stack installed above.
+RUN python -m pip install \
+    albumentations==1.4.18 \
+    'opencv-python-headless>=4.5,<4.13' \
+    av==16.1.0 \
+    diffusers==0.35.1 \
+    dm-tree==0.1.8 \
+    lmdb==1.7.5 \
+    msgpack==1.1.0 \
+    msgpack-numpy==0.4.8 \
+    pandas==2.2.3 \
+    peft==0.17.1 \
+    termcolor==3.2.0 \
+    transformers==4.51.3 \
+    tyro==0.9.17 \
+    click==8.1.8 \
+    datasets==3.6.0 \
+    cryptography==42.0.8 \
+    einops==0.8.1 \
+    gitpython==3.1.46 \
+    gymnasium==1.2.2 \
+    matplotlib==3.10.1 \
+    numpy==1.26.4 \
+    omegaconf==2.3.0 \
+    scipy==1.15.3 \
+    wandb==0.23.0 \
+    pyzmq==27.0.1
+
+# Jetson AI Lab's Thor wheel links against NVIDIA Performance Libraries.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nvpl0 cuda-cupti-13-0 libcudss0-cuda-13 \
+    && echo /usr/lib/aarch64-linux-gnu/libcudss/13 > /etc/ld.so.conf.d/cudss.conf \
+    && ldconfig \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/SO101
+
+# Keep the legacy variable compatible with Transformers while pointing it at
+# the standard Hugging Face hub cache layout.
+ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
+
+# The source tree, converted dataset, HF cache and outputs are mounted at run
+# time. This makes code edits and checkpoints survive container recreation.
+CMD ["bash"]
