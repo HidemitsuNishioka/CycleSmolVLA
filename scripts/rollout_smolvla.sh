@@ -27,6 +27,23 @@ require_value DATASET_TASK
 require_value SMOLVLA_POLICY_PATH
 require_value ROLLOUT_DEVICE
 
+# Synchronous inference makes the robot control loop wait for every VLA
+# forward pass.  RTC keeps the action queue and control loop running while a
+# new action chunk is inferred in the background.
+INFERENCE_TYPE="${SMOLVLA_INFERENCE_TYPE:-rtc}"
+RTC_EXECUTION_HORIZON="${SMOLVLA_RTC_EXECUTION_HORIZON:-10}"
+RTC_GUIDANCE_WEIGHT="${SMOLVLA_RTC_GUIDANCE_WEIGHT:-10.0}"
+INFERENCE_ARGS=(--inference.type="$INFERENCE_TYPE")
+if [[ "$INFERENCE_TYPE" == "rtc" ]]; then
+  INFERENCE_ARGS+=(
+    --inference.rtc.mode=guided
+    --inference.rtc.execution_horizon="$RTC_EXECUTION_HORIZON"
+    --inference.rtc.max_guidance_weight="$RTC_GUIDANCE_WEIGHT"
+  )
+elif [[ "$INFERENCE_TYPE" != "sync" ]]; then
+  die "SMOLVLA_INFERENCE_TYPE must be rtc or sync (got: $INFERENCE_TYPE)"
+fi
+
 # Resolve local checkpoints into the workspace mounted inside Docker.
 checkpoint_host="$SMOLVLA_POLICY_PATH"
 if [[ "$checkpoint_host" == /workspace/* ]]; then
@@ -53,7 +70,7 @@ fi
 
 args=(
   --strategy.type=base
-  --inference.type=sync
+  "${INFERENCE_ARGS[@]}"
   --policy.path="$checkpoint_container"
   --rename_map="$SMOLVLA_RENAME_MAP"
   --device="$ROLLOUT_DEVICE"
@@ -71,7 +88,7 @@ if [[ "$CHECK_ONLY" == true ]]; then
 fi
 
 echo "Checkpoint: $checkpoint_container"
-echo "Follower: $FOLLOWER_PORT ($FOLLOWER_ID); duration: ${SMOLVLA_ROLLOUT_DURATION}s; fps: $DATASET_FPS"
+echo "Follower: $FOLLOWER_PORT ($FOLLOWER_ID); duration: ${SMOLVLA_ROLLOUT_DURATION}s; fps: $DATASET_FPS; inference: $INFERENCE_TYPE"
 # Prefer the same Python environment used for training. Always import the
 # workspace source first so the CycleManip inference fixes are used.
 run_lerobot bash -c '

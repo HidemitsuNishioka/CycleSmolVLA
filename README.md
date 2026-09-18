@@ -203,10 +203,11 @@ SMOLVLA_OPEN_LOOP_MAX_FRAMES=100 \
 
 ## 実機 rollout
 
-CycleManip対応SmolVLAは `scripts/rollout_smolvla.sh` から起動します。
+CycleManip対応SmolVLAは `scripts/rollout_cyclemanip.sh` から起動します。
 Docker内で学習に使った `/workspace/.venv/bin/python`（存在しない場合は `python`）を使い、
 `.lerobot-src/src` の修正済みコードを優先して読み込みます。
-同期推論中は行動チャンクを実行している間も状態履歴を更新し、画像は学習時と同じ時点から取得します。
+既定ではRTCを使い、行動チャンクの推論をバックグラウンドで実行します。これにより、
+推論の待ち時間で実機制御ループが止まらず、30 Hzのコマンド周期を維持できます。
 
 まずFollowerとカメラを接続し、`config/robot.env` の `FOLLOWER_PORT`、`FOLLOWER_ID`、
 `CAMERA_TOP_DEVICE` を実際の機器に合わせてください。Followerは同じIDでキャリブレーション済みのものを使います。
@@ -216,16 +217,12 @@ Docker内で学習に使った `/workspace/.venv/bin/python`（存在しない�
 ls -l /dev/serial/by-id/ /dev/ttyACM* /dev/video*
 ```
 
-チェックポイントと実行設定は `config/dataset.local.env` に記載します。
-以下は、この環境で保存済みのCycleManipチェックポイントを使う例です。
+この環境で保存済みのCycleManipチェックポイントを使う例です。
 
 ```bash
-SMOLVLA_POLICY_PATH="outputs/train/smolvla_cyclemanip_wandb/checkpoints/last/pretrained_model"
-SMOLVLA_ROLLOUT_DURATION="10"
-DATASET_TASK="Shake the cup."
-DATASET_FPS="30"
-ROLLOUT_DEVICE="cuda"
-SMOLVLA_RENAME_MAP='{"observation.images.top":"observation.images.camera1"}'
+CYCLEMANIP_CHECKPOINT="outputs/train/cyclemanip/002000" \
+CYCLEMANIP_DURATION="10" \
+./scripts/rollout_cyclemanip.sh
 ```
 
 CycleManipの有効・無効、履歴長、行動チャンク長はチェックポイントから読み込みます。
@@ -237,28 +234,36 @@ CycleManipの重みキーを検査できます。機器が存在しない場合�
 モデル全体の推論や実機動作のテストではありません。
 
 ```bash
-./scripts/rollout_smolvla.sh --check
+./scripts/rollout_smolvla.sh \
+  --check \
+  --checkpoint outputs/train/cyclemanip/002000
 ```
 
 実機を動かす場合は、アームの周囲を空け、学習データに対応する初期姿勢・物体配置にして実行します。
 次のコマンドはモデル読み込みと機器接続が完了すると自律動作を開始します。
 
 ```bash
-./scripts/rollout_smolvla.sh
+./scripts/rollout_cyclemanip.sh
 
-# 設定ファイルを編集せず、チェックポイントと実行秒数を指定する場合
-./scripts/rollout_smolvla.sh \
-  --checkpoint outputs/train/smolvla_cyclemanip_wandb/checkpoints/006000/pretrained_model \
-  --duration 10
+# 指定チェックポイントと実行秒数を明示する場合
+CYCLEMANIP_CHECKPOINT="outputs/train/cyclemanip/002000" \
+CYCLEMANIP_DURATION="10" \
+./scripts/rollout_cyclemanip.sh
 ```
 
 チェックポイントはプロジェクト内のローカルディレクトリを指定してください。
-`--duration` は制御ループの実行時間です。`Ctrl+C` で終了要求を送れますが、
+`CYCLEMANIP_DURATION` は制御ループの実行時間です。`Ctrl+C` で終了要求を送れますが、
 標準rolloutの終了処理では起動時の姿勢へ戻ってから切断するため、即時停止とは異なります。
 
+RTCを無効化して同期推論を比較する場合だけ、`CYCLEMANIP_INFERENCE_TYPE=sync` を指定します。
+RTCの実行ホライズンとガイダンス強度は、それぞれ `CYCLEMANIP_RTC_EXECUTION_HORIZON` と
+`CYCLEMANIP_RTC_GUIDANCE_WEIGHT` で変更できます。
+
 検証状況：起動設定の `--check` と履歴処理の回帰テストは確認済みです。
-確認時点では `/dev/ttyACM1` とカメラが未接続で、実機動作・制御周期・タスク成功率は未確認です。
-同期推論の計算時間によって実際の制御周期は30 FPSを下回る場合があります。
+実機動作・制御周期・タスク成功率は、この環境では未確認です。
+RTCでは推論遅延を制御ループから分離しています。ログのCadence summaryでコマンド周期を確認し、
+推論が1チャンク（このチェックポイントでは50ステップ、30 Hzで約1.67秒）を超える場合は
+キュー枯渇が起きるため、解像度・推論設定・FPSを調整してください。
 
 ## HAMLET / GR00T N1.6
 
