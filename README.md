@@ -1,71 +1,73 @@
 # CycleSmolVLA
 
-**CycleManipの考え方をSmolVLAへ移植し、SO-101で繰り返し動作を学習・実行するプロジェクトです。**
+**English** | [日本語](README.ja.md)
 
-[CycleManip](https://isee-laboratory.github.io/CycleManip/)の「疎な画像履歴・密な状態履歴による過去の観測」と「進捗予測を補助タスクとする学習」を参考に、LeRobotのSmolVLAへ履歴エンコーダと進捗分類ヘッドを追加しています。SO-101でのデータ収録、学習、offline評価、実機rolloutをDocker経由で実行するスクリプトも含みます。
+**Bringing CycleManip's ideas to SmolVLA for learning and executing repetitive tasks on SO-101.**
 
-本プロジェクトはCycleManipの非公式な移植の試みです。SmolVLAとSO-101に合わせた独自の設計を含み、論文の主構成や実験結果の厳密な再現を目的とした実装ではありません。
+Inspired by [CycleManip](https://isee-laboratory.github.io/CycleManip/), this project adds a history encoder and a progress classification head to LeRobot's SmolVLA. It combines sparse image history with dense state history and uses progress prediction as an auxiliary learning task. Docker scripts cover data collection, training, offline evaluation, and real-robot rollout on SO-101.
 
-## 動作例・学習データ
+This is an unofficial attempt to adapt CycleManip to SmolVLA. It includes design choices specific to SmolVLA and SO-101 and is not intended as an exact reproduction of the paper's main architecture or experimental results.
 
-SO-101での実機動作を確認しています。実行結果の動画は以下の投稿で公開しています。
+## Demo and example training dataset
 
-**[▶ 実機で動かした結果の動画を見る（X）](https://x.com/mocha18231562/status/2101141258152677762?s=20)**
+The implementation has been tested on a physical SO-101. A video of the robot running the policy is available in this post:
 
-学習データの例として、カップを3回振るタスクを使用しています。
+**[▶ Watch the real-robot demo on X](https://x.com/mocha18231562/status/2101141258152677762?s=20)**
 
-| 項目 | 内容 |
+An example training dataset covers shaking a cup three times.
+
+| Item | Details |
 | --- | --- |
-| データセット | [Hidemitsu-Nishioka/so101_shake_cup_3times（Hugging Face）](https://huggingface.co/datasets/Hidemitsu-Nishioka/so101_shake_cup_3times) |
-| 指示 | `Shake the cup three times.` |
-| 形式・規模 | LeRobotDataset v3、10エピソード、5,990フレーム、30 fps（ローカルのメタデータに基づく） |
-| 観測 | topカメラ画像、関節・グリッパーの6次元状態 |
-| 学習・検証 | episode 0〜7で学習、8〜9で検証 |
-| 学習設定 | [config/smolvla_shake_cup_3times_300.env](config/smolvla_shake_cup_3times_300.env) |
+| Dataset | [Hidemitsu-Nishioka/so101_shake_cup_3times on Hugging Face](https://huggingface.co/datasets/Hidemitsu-Nishioka/so101_shake_cup_3times) |
+| Instruction | `Shake the cup three times.` |
+| Format and size | LeRobotDataset v3; 10 episodes, 5,990 frames, 30 fps, based on local metadata |
+| Observations | Top camera images and a 6-dimensional joint/gripper state |
+| Training and validation | Episodes 0–7 for training; 8–9 for validation |
+| Training configuration | [config/smolvla_shake_cup_3times_300.env](config/smolvla_shake_cup_3times_300.env) |
 
-動画は動作例として掲載しています。タスク成功率や繰り返し回数の誤差を集計したベンチマーク結果ではありません。
+The video is a demonstration, not a benchmark reporting aggregate task success rates or cycle count errors.
 
-## CycleManipとの共通点・違い
+## Relationship to CycleManip
 
-画像6フレーム、密な状態履歴、10段階の進捗分類、進捗分類損失の重み0.1という考え方・設定を取り入れています。以下は[CycleManip論文（v2）の主構成、§3.2〜3.4・§5.2](https://arxiv.org/html/2512.01022v2)と、本リポジトリの`cycle300`設定との比較です。
+This implementation adopts six image frames, dense state history, 10-bin progress classification, and a progress loss weight of 0.1. The table compares the main architecture in the [CycleManip paper, v2, Sections 3.2–3.4 and 5.2](https://arxiv.org/html/2512.01022v2) with this repository's `cycle300` configuration.
 
-| 項目 | CycleManipの主構成 | CycleSmolVLA（本実装） |
+| Component | CycleManip main architecture | CycleSmolVLA (this implementation) |
 | --- | --- | --- |
-| 状態履歴の表現 | 手先の位置・姿勢の差分 | 正規化した関節・グリッパー状態。手先姿勢への変換や時間差分は取らない |
-| 状態履歴の範囲 | エピソード開始から現在までの全履歴 | 現在を含む直近300フレーム（30 fpsで約10秒）。基本設定は32フレーム |
-| 画像の抽出 | 開始〜現在を対象に二分サンプリングと直近の指数サンプリングを組み合わせる | 現在からの固定オフセット`[-299, -150, -75, -2, -1, 0]`で6フレームを抽出 |
-| 履歴の特徴抽出 | TransformerのCLSトークンによる全体特徴と、直近フレームをMLPで処理した特徴 | 2層Transformerの平均特徴と最終有効時刻の特徴を融合し、1つの条件トークンに圧縮 |
-| 進捗予測の入力 | 視覚特徴と状態履歴特徴を融合した特徴 | 状態履歴特徴のみ。画像・言語との融合前に進捗分類ヘッドへ入力 |
-| 行動生成 | 拡散モデル・DDIM、行動ホライズン8 | SmolVLAのFlow Matching、行動チャンク50 |
+| State history representation | Differences in end-effector position and orientation | Normalized joint/gripper states, without conversion to end-effector poses or temporal differences |
+| State history horizon | All history from the start of the episode to the current frame | The latest 300 frames, including the current frame (about 10 seconds at 30 fps); the base configuration uses 32 frames |
+| Image sampling | Binary sampling over the episode history combined with exponential sampling near the current frame | Six frames at fixed offsets from the current frame: `[-299, -150, -75, -2, -1, 0]` |
+| History encoding | Global features from a Transformer's CLS token plus MLP features from recent frames | Mean features and the last valid frame's features from a two-layer Transformer, fused into one conditioning token |
+| Progress prediction input | Fused visual and state history features | State history features alone, passed to the progress head before fusion with images or language |
+| Action generation | Diffusion model with DDIM; action horizon of 8 | SmolVLA flow matching; action chunks of 50 |
 
-なお、[論文のπ₀への適用実験（§5.7）](https://arxiv.org/html/2512.01022v2#S5.SS7)では、現在の画像1枚と全関節履歴を使用しています。関節履歴を使う本実装はこの方向性にも近いものですが、画像6枚・固定長の状態履歴・SmolVLAという構成は独自です。
+The [paper's π₀ integration experiment (Section 5.7)](https://arxiv.org/html/2512.01022v2#S5.SS7) uses only the current image and the full joint history. This implementation's use of joint history is also close to that approach, but the combination of six images, a fixed state history window, and SmolVLA is specific to this project.
 
-本実装の進捗教師ラベルは、各エピソード内のフレーム位置をそのエピソード長で正規化して10分類にしたものです。実際の繰り返し回数を直接ラベルにしているわけではありません。また、300フレームより古い履歴は入力から外れ、進捗の補助損失は視覚と状態を融合する部分を直接監督しません。これらは長いタスクの回数判別を検討する際の設計上の違いです。
+Progress targets are calculated from each frame's relative position within its episode and discretized into 10 classes; they do not directly label the number of completed cycles. History older than 300 frames falls outside the input window, and the auxiliary progress loss does not directly supervise visual/state fusion. These design differences matter when considering cycle counting in longer tasks.
 
-実機rolloutにはRTCによる非同期推論を追加し、モデル推論とモーター制御を分離しています。これは本環境での実行方法です。
+Real-robot rollout also uses RTC for asynchronous inference, separating model inference from motor control. This is the execution setup used in this environment.
 
-実装箇所: [履歴サンプリング・履歴エンコーダ](.lerobot-src/src/lerobot/policies/smolvla/cyclemanip.py)、[SmolVLAへの接続・進捗損失](.lerobot-src/src/lerobot/policies/smolvla/modeling_smolvla.py)、[RTC rollout](scripts/rollout_cyclemanip.sh)。
+Implementation: [history sampling and encoding](.lerobot-src/src/lerobot/policies/smolvla/cyclemanip.py), [SmolVLA integration and progress loss](.lerobot-src/src/lerobot/policies/smolvla/modeling_smolvla.py), and [RTC rollout](scripts/rollout_cyclemanip.sh).
 
-## 現在の対応状況
+## Current support
 
-| 機能 | 状態 |
+| Feature | Status |
 | --- | --- |
-| LeRobot によるデバイス検出・設定・キャリブレーション | 使用対象 |
-| テレオペレーション・データ収録 | 使用対象 |
-| SMOLVLA の学習・offline評価・実機rollout | 現在の動作確認済みルート |
+| Device detection, setup, and calibration through LeRobot | Supported workflow |
+| Teleoperation and data collection | Supported workflow |
+| SmolVLA training, offline evaluation, and real-robot rollout | Currently tested workflow |
 
-このリポジトリでは、SO-101向けのSMOLVLA/CycleManipワークフローを対象にしています。
+This repository focuses on the SmolVLA/CycleManip workflow for SO-101.
 
-## 必要な環境
+## Requirements
 
 - Ubuntu
 - Docker Compose v2
-- NVIDIA Container Toolkit と CUDA 対応 GPU
+- NVIDIA Container Toolkit and a CUDA-capable GPU
 - SO-101 Leader / Follower
-- USB カメラ（現在の設定は1台）
+- USB camera (the current configuration uses one)
 - Git
 
-Docker image は `huggingface/lerobot-gpu:latest` を使用します。LeRobot 本体をホスト側へインストールする必要はありません。
+The Docker image is `huggingface/lerobot-gpu:latest`. LeRobot does not need to be installed on the host.
 
 ## Clone
 
@@ -74,9 +76,9 @@ git clone <your-repository-url>
 cd SO101
 ```
 
-## 初期設定
+## Initial setup
 
-### 1. Docker と GPU の確認
+### 1. Check Docker and the GPU
 
 ```bash
 nvidia-smi
@@ -84,27 +86,27 @@ docker compose version
 ./scripts/bootstrap.sh
 ```
 
-`bootstrap.sh` は公式 LeRobot GPU image を取得し、LeRobot と GPU がコンテナから見えるか確認します。
+`bootstrap.sh` pulls the official LeRobot GPU image and checks that LeRobot and the GPU are accessible inside the container.
 
-### 2. ローカル設定を作成
+### 2. Create a local configuration
 
 ```bash
 cp -n config/dataset.env config/dataset.local.env
 ```
 
-`config/dataset.local.env` は `.gitignore` 対象です。データセット名、保存先、学習ステップ数、W&B の設定など、PCごとに変わる値はこのファイルへ書きます。
+`config/dataset.local.env` is excluded by `.gitignore`. Use it for machine-specific values such as dataset names, output paths, training steps, and W&B settings.
 
-W&B を使う場合も API key は `config/dataset.local.env` にだけ設定してください。キーが空のまま `WANDB_ENABLE=true` の場合は、wrapper が online logging を自動的に無効化します。
+Keep your W&B API key only in `config/dataset.local.env`. If `WANDB_ENABLE=true` but the key is empty, the wrapper automatically disables online logging.
 
-### 3. デバイス設定
+### 3. Configure devices
 
-まず、SO-101 とカメラを接続して検出します。
+Connect the SO-101 and camera, then detect them:
 
 ```bash
 ./scripts/detect_devices.sh
 ```
 
-検出結果を [config/robot.env](config/robot.env) に設定します。
+Use the detected device paths to update [config/robot.env](config/robot.env).
 
 ```bash
 FOLLOWER_PORT="/dev/serial/by-id/<follower-id>"
@@ -119,26 +121,26 @@ CAMERA_FPS="30"
 DISPLAY_DATA="false"
 ```
 
-現在の SMOLVLA 設定は、データセットの `observation.images.top` を `camera1` へ rename します。カメラの feature 名を変更した場合は、`SMOLVLA_RENAME_MAP` も同じように変更してください。
+The current SmolVLA configuration renames the dataset's `observation.images.top` to `camera1`. If you change camera feature names, update `SMOLVLA_RENAME_MAP` accordingly.
 
-## SO-101 の準備
+## Prepare the SO-101
 
-次の順番で実行します。モーターが動く操作では、アームの周囲を空けてください。
+Run these commands in order. Keep the area around the arm clear when operating the motors.
 
 ```bash
-# モーターの初期設定（初回または必要時）
+# Initial motor setup (first use or when needed)
 ./scripts/setup_motors.sh
 
-# Leader / Follower のキャリブレーション
+# Calibrate the Leader / Follower
 ./scripts/calibrate.sh
 
-# Leader で Follower が追従することを確認
+# Check that the Follower follows the Leader
 ./scripts/teleop.sh
 ```
 
-## データセット収録
+## Record a dataset
 
-`config/dataset.local.env` の次の値を確認してから収録します。
+Check these values in `config/dataset.local.env` before recording:
 
 ```bash
 DATASET_REPO_ID="your-hf-user/so101_task"
@@ -148,87 +150,84 @@ DATASET_NUM_EPISODES="10"
 DATASET_FPS="30"
 ```
 
-収録が完了すると、データセットは自動的にHugging Faceへアップロードされます。
-`config/dataset.local.env` に、書き込み権限のあるトークンを設定してください。
+The dataset is automatically uploaded to Hugging Face after recording. Set a token with write access in `config/dataset.local.env`:
 
 ```bash
 HF_TOKEN="hf_..."
 ```
 
-`HF_TOKEN` を設定しない場合は、事前に `hf auth login` でログインしておけば、既存のHugging Faceログイン情報も利用できます。
-`DATASET_PUSH_TO_HUB="false"` に変更すると自動アップロードを無効化できます。
-データセットはデフォルトで非公開（`DATASET_PRIVATE="true"`）です。
+If `HF_TOKEN` is not set, you can use existing Hugging Face credentials by signing in with `hf auth login` beforehand. Set `DATASET_PUSH_TO_HUB="false"` to disable automatic uploads. Datasets are private by default (`DATASET_PRIVATE="true"`).
 
 ```bash
 ./scripts/record.sh
 ```
 
-データは `data/` に LeRobotDataset v3 として保存されます。 `data/` は Git 管理外です。
+Data is saved under `data/` in LeRobotDataset v3 format. The `data/` directory is not tracked by Git.
 
-収録後の確認:
+Inspect the recording:
 
 ```bash
 ./scripts/inspect_dataset.sh
 ./scripts/visualize_dataset.sh 0
 ```
 
-### 既存データセットのアップロード
+### Upload an existing dataset
 
-すでに `data/` に保存されているLeRobotデータセットは、次のコマンドでアップロードできます。デフォルトでは `config/dataset.local.env` の `DATASET_ROOT` と `DATASET_REPO_ID` を使用します。
+Upload a LeRobot dataset already stored in `data/` with the following command. By default, it uses `DATASET_ROOT` and `DATASET_REPO_ID` from `config/dataset.local.env`.
 
 ```bash
 ./scripts/upload_dataset.sh
 ```
 
-別のデータセットを指定する場合:
+To specify a different dataset:
 
 ```bash
 ./scripts/upload_dataset.sh data/another_dataset your-hf-user/another_dataset
 ```
 
-メタデータ、Parquet、動画、Dataset Cardをまとめてアップロードします。Hugging Faceの書き込み権限を持つ `HF_TOKEN` を `config/dataset.local.env` に設定するか、事前に `hf auth login` を実行してください。
+Metadata, Parquet files, videos, and the dataset card are uploaded together. Set `HF_TOKEN` with Hugging Face write access in `config/dataset.local.env`, or run `hf auth login` beforehand.
 
-## SMOLVLA 学習
+## Train SmolVLA
 
-ローカルの `data/so101_5eps` を CycleManip 対応 SmolVLA で学習する設定:
+To train SmolVLA with CycleManip-style history on the local `data/so101_5eps` dataset:
 
 ```bash
 SO101_DATASET_CONFIG=config/smolvla_so101_5eps_cycle300.env ./scripts/train_smolvla.sh
 ```
 
-このデータはディレクトリ名にかかわらず10エピソード・4,499フレームで、タスクは `Pick up the object and place it in the target area` です。episode 0〜7を学習、8〜9を検証に使います。状態履歴300フレーム、画像履歴6フレーム、行動チャンク50フレーム、batch size 4で20,000ステップ学習します。2,000ステップごとに最大100サンプルで検証し、ディスク使用量を抑えるためチェックポイントは5,000ステップごとに保存します。出力先は `outputs/train/smolvla_so101_5eps_cycle300` です。W&Bは `lerobot-so101` プロジェクトへのオンライン送信を有効にしています。`config/dataset.local.env` に `WANDB_API_KEY` を設定してください（未設定の場合、共通スクリプトがW&Bを無効化します）。Hubへのアップロードは無効です。同じ出力先で重複起動しないでください。
+Despite the directory name, this dataset contains 10 episodes and 4,499 frames for the task `Pick up the object and place it in the target area`. Episodes 0–7 are used for training and 8–9 for validation. Training runs for 20,000 steps with a state history of 300 frames, an image history of six frames, action chunks of 50, and a batch size of 4. Validation uses up to 100 samples every 2,000 steps. Checkpoints are saved every 5,000 steps to reduce disk usage. Outputs go to `outputs/train/smolvla_so101_5eps_cycle300`. Online W&B logging is enabled for the `lerobot-so101` project; set `WANDB_API_KEY` in `config/dataset.local.env` (the shared script disables W&B if the key is missing). Hub uploads are disabled. Do not run multiple jobs with the same output directory.
 
-`Hidemitsu-Nishioka/so101_shake_cup_3times` を関節履歴300フレームで学習する設定:
+To train on `Hidemitsu-Nishioka/so101_shake_cup_3times` with 300 frames of joint history:
 
 ```bash
 SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env ./scripts/train_smolvla.sh
 ```
 
-データは `data/so101_shake_cup_3times` に取得済みです。30 fpsで現在を含む連続300フレーム（オフセット -299〜0）を入力し、エピソード冒頭の不足分はマスクします。画像履歴は6フレーム、行動チャンクは50フレームです。episode 0〜7で20,000ステップ学習し、8〜9から最大100サンプルで2,000ステップごとに検証損失を計算します。出力先は `outputs/train/smolvla_shake_cup_3times_cycle300` です。同じ出力先での重複起動は避けてください。
+In this workspace, the dataset has been downloaded to `data/so101_shake_cup_3times`. The input contains 300 consecutive frames at 30 fps, including the current frame (offsets −299 to 0); missing history at the start of an episode is masked. Image history contains six frames, and action chunks contain 50 frames. Training uses episodes 0–7 for 20,000 steps, with validation loss calculated every 2,000 steps on up to 100 samples from episodes 8–9. Outputs go to `outputs/train/smolvla_shake_cup_3times_cycle300`. Avoid concurrent runs with the same output directory.
 
-現時点で動作確認済みの学習コマンドです。
+The standard training command has also been tested:
 
 ```bash
 ./scripts/train_smolvla.sh
 ```
 
-既定では、CycleManip論文に基づく履歴認識を有効にしています。各時刻で画像を6フレーム、関節状態を過去32フレーム読み込み、行動損失に10段階の進捗分類損失（重み0.1）を加えます。無効にする場合は、`config/dataset.local.env`で次を設定します。
+CycleManip-inspired history processing is enabled by default. At each timestep, the base configuration loads six image frames and a 32-frame joint state history, and adds a 10-class progress loss with weight 0.1 to the action loss. To disable it, set the following in `config/dataset.local.env`:
 
 ```bash
 SMOLVLA_CYCLE_ENABLED="false"
 ```
 
-CycleManipの論文を参考に、高コストな画像の疎な履歴、低コストな状態の密な履歴、進捗の補助分類を、LeRobotの時系列データローダとSmolVLAの条件トークンへ移植しています。具体的な設計差は冒頭の「CycleManipとの共通点・違い」を参照してください。
+Sparse history for expensive visual observations, dense history for inexpensive state observations, and auxiliary progress classification are adapted to LeRobot's temporal data loader and SmolVLA's conditioning tokens. See “Relationship to CycleManip” above for the specific design differences.
 
-デフォルトでは次の設定です。
+Default settings:
 
-- base model: `lerobot/smolvla_base`
-- batch size: `4`
-- steps: `20000`
+- Base model: `lerobot/smolvla_base`
+- Batch size: `4`
+- Steps: `20000`
 - GPU: `cuda`
-- 出力先: `outputs/train/smolvla_so101_wrist_20k_v1/`
+- Output directory: `outputs/train/smolvla_so101_wrist_20k_v1/`
 
-短い smoke test を行う場合は、`config/dataset.local.env` に追加・上書きします。
+For a short smoke test, add or override these values in `config/dataset.local.env`:
 
 ```bash
 SMOLVLA_STEPS="100"
@@ -236,16 +235,15 @@ SMOLVLA_OUTPUT_DIR="outputs/train/smolvla_smoke"
 SMOLVLA_JOB_NAME="smolvla_smoke"
 ```
 
-## SMOLVLA offline 評価
+## Offline SmolVLA evaluation
 
-評価対象はデータセットの最後の `DATASET_EVAL_SPLIT`（デフォルト20%）です。ロボットには action を送信しません。
-評価ランチャーも実機rolloutと同じPython環境を選び、`.lerobot-src/src` を優先して読み込みます。
+Evaluation uses the final `DATASET_EVAL_SPLIT` fraction of the dataset (20% by default). No actions are sent to the robot. The evaluation launcher selects the same Python environment as real-robot rollout and prioritizes `.lerobot-src/src`.
 
 ```bash
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
-出力先は `outputs/eval/smolvla_so101_wrist_20k_open_loop/` です。テスト時は次のように対象 episode やフレーム数を制限できます。
+Outputs go to `outputs/eval/smolvla_so101_wrist_20k_open_loop/`. For a shorter test, limit the episodes or frame count:
 
 ```bash
 SMOLVLA_OPEN_LOOP_EPISODES=8 \
@@ -253,8 +251,7 @@ SMOLVLA_OPEN_LOOP_MAX_FRAMES=100 \
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
-`cycle300/016000` のep8・ep9全体を評価する例です。既定の `fresh` は毎フレーム新しい
-行動チャンクを推論し、その先頭を比較します。実機のRTCキューは使用しません。
+To evaluate all of episodes 8 and 9 using `cycle300/016000`, run the following. The default `fresh` mode predicts a new action chunk for every frame and compares its first action. It does not use the real-robot RTC queue.
 
 ```bash
 SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
@@ -263,10 +260,7 @@ SMOLVLA_OPEN_LOOP_OUTPUT_DIR=outputs/eval/smolvla_cycle300_016000_ep8_ep9/fresh 
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
-実機と同じRTCエンジンの評価には、LeRobotのPython環境内で次を実行します。記録した観測を
-30 Hzで供給し、実際の非同期推論・行動キューを通した出力を比較します。推論前後の動画処理は
-計測区間から除外します。各時刻の観測は記録データなので、実機の追従やタスク成功の評価ではありません。
-出力待ちフレームは誤差集計から除外し、待ち時間・キュー不足・±10の制限適用前後の誤差も保存します。
+To evaluate the same RTC engine used on the robot, run the following in LeRobot's Python environment. Recorded observations are supplied at 30 Hz, and outputs are compared after passing through actual asynchronous inference and the action queue. Video processing before and after inference is excluded from the measurement interval. Because observations come from recorded data, this does not evaluate physical tracking or task success. Frames waiting for an output are excluded from error aggregation; waiting time, queue underruns, and errors before and after the ±10 limit are also saved.
 
 ```bash
 python scripts/evaluate_smolvla_rtc_open_loop.py \
@@ -276,35 +270,17 @@ python scripts/evaluate_smolvla_rtc_open_loop.py \
   --output-dir outputs/eval/smolvla_cycle300_016000_ep8_ep9/rtc
 ```
 
-同じ評価スクリプトで `--disable-guidance` を付けると、モデル内部のRTC補正を完全に迂回します
-（非同期キュー・遅延補償は残ります）。`--inference-type sync --n-action-steps 1` では、
-実機用の同期推論エンジンを使い、RTCのキュー・遅延補償も無効にして毎回予測し直します。
-`--n-action-steps 50` なら補正なしで50手を順に使用する比較になります。同期推論が30 Hzに
-間に合わない場合も記録フレームは省略せず、実測の処理Hzを `summary.json` に記録します。
+Add `--disable-guidance` to bypass RTC correction inside the model entirely while retaining the asynchronous queue and delay compensation. With `--inference-type sync --n-action-steps 1`, the script uses the real-robot synchronous inference engine, disables the RTC queue and delay compensation, and predicts again at each step. Setting `--n-action-steps 50` instead executes 50 actions sequentially without correction. If synchronous inference cannot keep up with 30 Hz, recorded frames are still processed without skipping, and the measured processing rate is written to `summary.json`.
 
-チャンクの先頭と後続の精度を切り分けるには `scripts/diagnose_smolvla_action_chunks.py` に
-`--checkpoint`、`--dataset-root`、`--output-dir` を指定します。ep8・ep9を既定で30フレーム
-ごとにサンプルし、各予測を対応する未来時刻のGTと比較します。エピソード端のパディングは除外します。
+To compare the accuracy of the first and subsequent actions in a chunk, run `scripts/diagnose_smolvla_action_chunks.py` with `--checkpoint`, `--dataset-root`, and `--output-dir`. By default, it samples episodes 8 and 9 every 30 frames and compares each prediction with ground truth at the corresponding future timestep. Padding at episode boundaries is excluded.
 
-## 実機 rollout
+## Real-robot rollout
 
-CycleManip対応SmolVLAは `scripts/rollout_cyclemanip.sh` から起動します。
-Docker内で学習に使った `/workspace/.venv/bin/python`（存在しない場合は `python`）を使い、
-`.lerobot-src/src` の修正済みコードを優先して読み込みます。
-既定ではRTCを使い、行動チャンクの推論をバックグラウンドで実行します。これにより、
-推論の待ち時間で実機制御ループが止まらず、30 Hzのコマンド周期を維持できます。
+Launch SmolVLA with CycleManip-style history using `scripts/rollout_cyclemanip.sh`. Inside Docker, it uses the training environment's `/workspace/.venv/bin/python` (or `python` if unavailable) and prioritizes the modified code in `.lerobot-src/src`. RTC is enabled by default and predicts action chunks in the background. This separates inference latency from the robot control loop so it can maintain a 30 Hz command stream.
 
-実行中のターミナルにフォーカスして **Rキー** を押すと、観測履歴・行動キュー・補間中の
-行動をリセットし、現在の姿勢から推論を再開します。Enterは不要です。RTCの実行中の
-推論が完了してからリセットするため、古い予測が再開後に混ざりません。実行時間の上限も
-Rを押して再開した時点から数え直します。アームやコップの物理的な配置はそのままなので、
-次の周回を開始できる配置で操作してください。終了は従来どおりCtrl+Cです。
-このキー操作はランチャーが `--strategy.keyboard_restart=true` で有効にし、入力は実行中の
-ターミナルだけから受け付けます。`--interactive=true` のコマンド入力モードでは無効です。
+While the terminal running the rollout has focus, press **R** to clear observation history, the action queue, and actions being interpolated, then resume inference from the current pose. Enter is not required. Reset waits for any in-flight RTC inference to finish so stale predictions do not enter the resumed run. The duration limit also restarts from the time you resume with R. The physical arm and cup positions are unchanged, so use this when they are positioned to start another run. Stop with Ctrl+C as usual. The launcher enables this shortcut with `--strategy.keyboard_restart=true`; input is accepted only from the running terminal. It is disabled in the `--interactive=true` command input mode.
 
-RTCを完全に外して、毎回チャンクの先頭1手だけを使う比較は次で起動できます。
-`sync` にするだけではチェックポイント既定の50手キューが残るため、1手の指定も必要です。
-同期の1手推論では制御周期がモデルの推論速度に制約されます。
+For a comparison that disables RTC completely and executes only the first action of each newly predicted chunk, use the following command. Setting `sync` alone retains the checkpoint's default 50-action queue, so the one-action setting is also required. In this mode, the control rate is limited by model inference speed.
 
 ```bash
 SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
@@ -312,15 +288,13 @@ CYCLEMANIP_INFERENCE_TYPE=sync CYCLEMANIP_N_ACTION_STEPS=1 \
 ./scripts/rollout_cyclemanip.sh
 ```
 
-まずFollowerとカメラを接続し、`config/robot.env` の `FOLLOWER_PORT`、`FOLLOWER_ID`、
-`CAMERA_TOP_DEVICE` を実際の機器に合わせてください。Followerは同じIDでキャリブレーション済みのものを使います。
-学習時と同じカメラ配置・関節単位を使ってください。
+Connect the Follower and camera, then set `FOLLOWER_PORT`, `FOLLOWER_ID`, and `CAMERA_TOP_DEVICE` in `config/robot.env` to match your hardware. Use a Follower calibrated under that same ID, with the same camera placement and joint units used during training.
 
 ```bash
 ls -l /dev/serial/by-id/ /dev/ttyACM* /dev/video*
 ```
 
-この環境で保存済みのCycleManipチェックポイントを使う例です。
+Example using a CycleManip-style checkpoint saved in this workspace:
 
 ```bash
 SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
@@ -329,29 +303,15 @@ CYCLEMANIP_DURATION="10" \
 ./scripts/rollout_cyclemanip.sh
 ```
 
-CycleManipの有効・無効、履歴長、行動チャンク長はチェックポイントから読み込みます。
-`SMOLVLA_CYCLE_ENABLED` は学習用設定なので、rollout時の切り替えには使いません。
-`last` は最新の保存先に追従します。固定したモデルを使う場合は `006000` などを指定してください。
+Whether CycleManip-style processing is enabled, the history length, and the action chunk length are read from the checkpoint. `SMOLVLA_CYCLE_ENABLED` is a training setting, not a rollout switch. `last` follows the latest saved checkpoint; use a specific directory such as `006000` to select a fixed model.
 
-CycleManipのモデル実装は `KainaJetson:~/SO101/` の学習コードに合わせています。
-履歴Transformerは4ヘッド・PreNorm、融合層の活性化はSiLUです。これらは重みの形状に
-現れないため、重みが読み込めても別の実装では同じ予測になりません。
+The CycleManip-style model implementation matches the training code at `KainaJetson:~/SO101/`. The history Transformer uses four attention heads and PreNorm, and the fusion layers use SiLU. These choices are not reflected in weight shapes, so loading weights successfully into a different implementation does not ensure identical predictions.
 
-CycleManipの履歴は推論回数ではなく制御周期ごとに保存します。RTCの `cycle300` では
-30 Hzの関節状態300フレームと、`[-299, -150, -75, -2, -1, 0]` フレームの画像6枚を
-モデルに渡します。開始時の不足履歴は最初のフレームで埋め、学習時と同じ `_is_pad` マスクで
-無効にします。実行リセット時には履歴も消去します。
-RTCではCPU上に画像を保存し、推論時に選んだ6枚だけをGPUへ転送します。
-同期の1手推論では観測取得も遅くなるため、300フレームが必ず10秒に相当するわけではありません。
+History is recorded at every control cycle, not only when inference runs. With RTC and `cycle300`, the model receives 300 joint state frames at 30 Hz and six images at offsets `[-299, -150, -75, -2, -1, 0]`. Missing history at startup is filled with the first frame and invalidated using the same `_is_pad` masks as training. A rollout reset also clears history. RTC stores images on the CPU and transfers only the six selected frames to the GPU during inference. With synchronous one-action inference, observation acquisition is slower too, so 300 frames do not necessarily correspond to 10 seconds.
 
-2026-09-19の実装照合より前に作成した評価は、学習側とは異なるモデル構造・画像履歴での
-結果でした。チェックポイントの学習品質を判断する数値としては使用しないでください。
-照合後の診断・評価は `outputs/eval/learning_cause_20260919/` に保存しています。
+Evaluations produced before the implementation alignment on 2026-09-19 used a model structure and image history that differed from training. Do not use those results to judge checkpoint training quality. Diagnostics and evaluations after alignment are stored in `outputs/eval/learning_cause_20260919/`.
 
-記録済みデータを実機の入力形式で再生し、オープンループ評価との入力一致を検証する場合は、
-LeRobotのPython環境内で次を実行します。ロボットやカメラへの接続は行いません。
-`--compare-actions` は同じノイズでの行動出力差も記録します。画像のCPU/GPU変換の丸め差が
-あるため、行動出力の完全一致を保証する検査ではありません。
+To replay recorded data in the real-robot input format and verify input parity with offline evaluation, run the following in LeRobot's Python environment. It does not connect to a robot or camera. `--compare-actions` also records action output differences using the same noise. CPU/GPU image conversion can introduce rounding differences, so this check does not guarantee exact action equality.
 
 ```bash
 python scripts/check_smolvla_input_parity.py \
@@ -360,11 +320,9 @@ python scripts/check_smolvla_input_parity.py \
   --device cuda --compare-actions
 ```
 
-検証結果は `outputs/eval/smolvla_input_parity.json` に保存されます。
+Results are saved to `outputs/eval/smolvla_input_parity.json`.
 
-ロボット・カメラに接続せず、Docker内のimport、CLI設定、チェックポイントのファイルと
-CycleManipの重みキーを検査できます。機器が存在しない場合も、その状態を表示して検査を完了します。
-モデル全体の推論や実機動作のテストではありません。
+The following checks Docker imports, CLI configuration, checkpoint files, and CycleManip-specific weight keys without connecting to the robot or camera. Missing devices are reported without preventing the check from completing. This does not test full model inference or physical robot behavior.
 
 ```bash
 ./scripts/rollout_smolvla.sh \
@@ -372,50 +330,41 @@ CycleManipの重みキーを検査できます。機器が存在しない場合�
   --checkpoint outputs/train/smolvla_shake_cup_3times_cycle300/016000
 ```
 
-実機を動かす場合は、アームの周囲を空け、学習データに対応する初期姿勢・物体配置にして実行します。
-次のコマンドはモデル読み込みと機器接続が完了すると自律動作を開始します。
+Before moving the robot, clear the area around the arm and use an initial pose and object placement consistent with the training data. The following commands start autonomous motion once model loading and device connection finish.
 
 ```bash
 ./scripts/rollout_cyclemanip.sh
 
-# 指定チェックポイントと実行秒数を明示する場合
+# Explicitly select a checkpoint and rollout duration
 SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
 CYCLEMANIP_CHECKPOINT="outputs/train/smolvla_shake_cup_3times_cycle300/016000" \
 CYCLEMANIP_DURATION="10" \
 ./scripts/rollout_cyclemanip.sh
 ```
 
-チェックポイントはプロジェクト内のローカルディレクトリを指定してください。
-`CYCLEMANIP_DURATION` は制御ループの実行時間です。`Ctrl+C` で終了要求を送れますが、
-標準rolloutの終了処理では起動時の姿勢へ戻ってから切断するため、即時停止とは異なります。
+Specify a local checkpoint directory inside the project. `CYCLEMANIP_DURATION` controls the duration of the control loop. Ctrl+C requests termination, but the standard rollout shutdown returns the arm to its starting pose before disconnecting; it is not an immediate stop.
 
-RTCを無効化して同期推論を比較する場合だけ、`CYCLEMANIP_INFERENCE_TYPE=sync` を指定します。
-RTCの実行ホライズンとガイダンス強度は、それぞれ `CYCLEMANIP_RTC_EXECUTION_HORIZON` と
-`CYCLEMANIP_RTC_GUIDANCE_WEIGHT` で変更できます。
+Set `CYCLEMANIP_INFERENCE_TYPE=sync` when comparing synchronous inference with RTC disabled. Change the RTC execution horizon and guidance weight with `CYCLEMANIP_RTC_EXECUTION_HORIZON` and `CYCLEMANIP_RTC_GUIDANCE_WEIGHT`, respectively.
 
-検証状況：起動設定の `--check` と履歴処理の回帰テストは確認済みです。
-実機動作の結果は冒頭の動画リンクに掲載しています。制御周期の定量評価とタスク成功率の集計は未掲載です。
-RTCでは推論遅延を制御ループから分離しています。ログのCadence summaryでコマンド周期を確認し、
-推論が1チャンク（このチェックポイントでは50ステップ、30 Hzで約1.67秒）を超える場合は
-キュー枯渇が起きるため、解像度・推論設定・FPSを調整してください。
+Validation status: the startup `--check` and history-processing regression tests have passed. Real-robot results are linked in the demo section above. Quantitative control-rate measurements and aggregate task success rates have not been published. RTC separates inference latency from the control loop. Check the command cadence in the logs' Cadence summary; inference taking longer than one chunk (50 steps, approximately 1.67 seconds at 30 Hz for this checkpoint) can cause queue underruns, so adjust resolution, inference settings, or FPS as needed.
 
-## ディレクトリ構成
+## Directory structure
 
 ```text
 SO101/
 ├── config/
-│   ├── dataset.env          # Git管理する基本設定・秘密情報なし
-│   ├── dataset.local.env    # ローカル上書き（Git管理外）
-│   └── robot.env            # SO-101 / カメラ設定
-├── scripts/                 # Docker経由の実行 wrapper
-├── .lerobot-src/            # CycleManip対応LeRobotソース
-├── data/                    # データセット（Git管理外）
-└── outputs/                 # checkpoint・評価結果（Git管理外）
+│   ├── dataset.env          # Tracked base settings; no secrets
+│   ├── dataset.local.env    # Local overrides (not tracked)
+│   └── robot.env            # SO-101 / camera settings
+├── scripts/                 # Docker execution wrappers
+├── .lerobot-src/            # LeRobot source with CycleManip-style support
+├── data/                    # Datasets (not tracked)
+└── outputs/                 # Checkpoints and evaluation results (not tracked)
 ```
 
-## Git へ push する場合
+## Push changes to Git
 
-`data/`、`outputs/`、キャッシュ、ローカル設定は `.gitignore` で除外されています。設定とソースを確認してから commit してください。
+`data/`, `outputs/`, caches, and local settings are excluded by `.gitignore`. Review configuration and source files before committing.
 
 ```bash
 git status
@@ -424,9 +373,9 @@ git commit -m "Add SO-101 SMOLVLA workflow"
 git push -u origin HEAD
 ```
 
-サブモジュール内に変更がある場合は、先にサブモジュール側で commit・push し、その後に親リポジトリで gitlink を更新します。
+If you make changes inside a submodule, commit and push them in the submodule first, then update the gitlink in the parent repository.
 
-## 公式ドキュメント
+## Official documentation
 
 - [CycleManip paper](https://arxiv.org/abs/2512.01022)
 - [CycleManip project](https://isee-laboratory.github.io/CycleManip/)
