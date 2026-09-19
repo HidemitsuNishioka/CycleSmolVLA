@@ -1,6 +1,50 @@
-# SO-101 × SMOLVLA
+# CycleSmolVLA
 
-SO-101 の模倣学習を、Hugging Face 公式 LeRobot と SMOLVLA で実行するための Docker wrapper です。
+**CycleManipの考え方をSmolVLAへ移植し、SO-101で繰り返し動作を学習・実行するプロジェクトです。**
+
+[CycleManip](https://isee-laboratory.github.io/CycleManip/)の「疎な画像履歴・密な状態履歴による過去の観測」と「進捗予測を補助タスクとする学習」を参考に、LeRobotのSmolVLAへ履歴エンコーダと進捗分類ヘッドを追加しています。SO-101でのデータ収録、学習、offline評価、実機rolloutをDocker経由で実行するスクリプトも含みます。
+
+本プロジェクトはCycleManipの非公式な移植の試みです。SmolVLAとSO-101に合わせた独自の設計を含み、論文の主構成や実験結果の厳密な再現を目的とした実装ではありません。
+
+## 動作例・学習データ
+
+SO-101での実機動作を確認しています。実行結果の動画は以下の投稿で公開しています。
+
+**[▶ 実機で動かした結果の動画を見る（X）](https://x.com/mocha18231562/status/2101141258152677762?s=20)**
+
+学習データの例として、カップを3回振るタスクを使用しています。
+
+| 項目 | 内容 |
+| --- | --- |
+| データセット | [Hidemitsu-Nishioka/so101_shake_cup_3times（Hugging Face）](https://huggingface.co/datasets/Hidemitsu-Nishioka/so101_shake_cup_3times) |
+| 指示 | `Shake the cup three times.` |
+| 形式・規模 | LeRobotDataset v3、10エピソード、5,990フレーム、30 fps（ローカルのメタデータに基づく） |
+| 観測 | topカメラ画像、関節・グリッパーの6次元状態 |
+| 学習・検証 | episode 0〜7で学習、8〜9で検証 |
+| 学習設定 | [config/smolvla_shake_cup_3times_300.env](config/smolvla_shake_cup_3times_300.env) |
+
+動画は動作例として掲載しています。タスク成功率や繰り返し回数の誤差を集計したベンチマーク結果ではありません。
+
+## CycleManipとの共通点・違い
+
+画像6フレーム、密な状態履歴、10段階の進捗分類、進捗分類損失の重み0.1という考え方・設定を取り入れています。以下は[CycleManip論文（v2）の主構成、§3.2〜3.4・§5.2](https://arxiv.org/html/2512.01022v2)と、本リポジトリの`cycle300`設定との比較です。
+
+| 項目 | CycleManipの主構成 | CycleSmolVLA（本実装） |
+| --- | --- | --- |
+| 状態履歴の表現 | 手先の位置・姿勢の差分 | 正規化した関節・グリッパー状態。手先姿勢への変換や時間差分は取らない |
+| 状態履歴の範囲 | エピソード開始から現在までの全履歴 | 現在を含む直近300フレーム（30 fpsで約10秒）。基本設定は32フレーム |
+| 画像の抽出 | 開始〜現在を対象に二分サンプリングと直近の指数サンプリングを組み合わせる | 現在からの固定オフセット`[-299, -150, -75, -2, -1, 0]`で6フレームを抽出 |
+| 履歴の特徴抽出 | TransformerのCLSトークンによる全体特徴と、直近フレームをMLPで処理した特徴 | 2層Transformerの平均特徴と最終有効時刻の特徴を融合し、1つの条件トークンに圧縮 |
+| 進捗予測の入力 | 視覚特徴と状態履歴特徴を融合した特徴 | 状態履歴特徴のみ。画像・言語との融合前に進捗分類ヘッドへ入力 |
+| 行動生成 | 拡散モデル・DDIM、行動ホライズン8 | SmolVLAのFlow Matching、行動チャンク50 |
+
+なお、[論文のπ₀への適用実験（§5.7）](https://arxiv.org/html/2512.01022v2#S5.SS7)では、現在の画像1枚と全関節履歴を使用しています。関節履歴を使う本実装はこの方向性にも近いものですが、画像6枚・固定長の状態履歴・SmolVLAという構成は独自です。
+
+本実装の進捗教師ラベルは、各エピソード内のフレーム位置をそのエピソード長で正規化して10分類にしたものです。実際の繰り返し回数を直接ラベルにしているわけではありません。また、300フレームより古い履歴は入力から外れ、進捗の補助損失は視覚と状態を融合する部分を直接監督しません。これらは長いタスクの回数判別を検討する際の設計上の違いです。
+
+実機rolloutにはRTCによる非同期推論を追加し、モデル推論とモーター制御を分離しています。これは本環境での実行方法です。
+
+実装箇所: [履歴サンプリング・履歴エンコーダ](.lerobot-src/src/lerobot/policies/smolvla/cyclemanip.py)、[SmolVLAへの接続・進捗損失](.lerobot-src/src/lerobot/policies/smolvla/modeling_smolvla.py)、[RTC rollout](scripts/rollout_cyclemanip.sh)。
 
 ## 現在の対応状況
 
@@ -174,7 +218,7 @@ SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env ./scripts/train_smo
 SMOLVLA_CYCLE_ENABLED="false"
 ```
 
-論文の実装が公開されていないため、CycleManipの論文と公開READMEに記載された仕様（高コストな画像の疎な履歴、低コストな状態の密な履歴、進捗の補助分類）を、LeRobotの時系列データローダとSmolVLAの条件トークンへ移植しています。
+CycleManipの論文を参考に、高コストな画像の疎な履歴、低コストな状態の密な履歴、進捗の補助分類を、LeRobotの時系列データローダとSmolVLAの条件トークンへ移植しています。具体的な設計差は冒頭の「CycleManipとの共通点・違い」を参照してください。
 
 デフォルトでは次の設定です。
 
@@ -350,7 +394,7 @@ RTCの実行ホライズンとガイダンス強度は、それぞれ `CYCLEMANI
 `CYCLEMANIP_RTC_GUIDANCE_WEIGHT` で変更できます。
 
 検証状況：起動設定の `--check` と履歴処理の回帰テストは確認済みです。
-実機動作・制御周期・タスク成功率は、この環境では未確認です。
+実機動作の結果は冒頭の動画リンクに掲載しています。制御周期の定量評価とタスク成功率の集計は未掲載です。
 RTCでは推論遅延を制御ループから分離しています。ログのCadence summaryでコマンド周期を確認し、
 推論が1チャンク（このチェックポイントでは50ステップ、30 Hzで約1.67秒）を超える場合は
 キュー枯渇が起きるため、解像度・推論設定・FPSを調整してください。
@@ -384,6 +428,9 @@ git push -u origin HEAD
 
 ## 公式ドキュメント
 
+- [CycleManip paper](https://arxiv.org/abs/2512.01022)
+- [CycleManip project](https://isee-laboratory.github.io/CycleManip/)
+- [CycleManip repository](https://github.com/iSEE-Laboratory/CycleManip)
 - [LeRobot repository](https://github.com/huggingface/lerobot)
 - [LeRobot installation](https://huggingface.co/docs/lerobot/main/en/installation)
 - [SO-101](https://huggingface.co/docs/lerobot/main/en/so101)
