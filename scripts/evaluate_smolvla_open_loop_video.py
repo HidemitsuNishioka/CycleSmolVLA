@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated episode IDs. Empty means the last eval_split fraction.",
     )
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--max-frames-per-episode", type=int, default=0)
     parser.add_argument(
@@ -81,7 +82,7 @@ def selected_episode_ids(dataset: LeRobotDataset, args: argparse.Namespace) -> l
 def as_rgb_uint8(image: torch.Tensor) -> np.ndarray:
     array = image.detach().cpu().float().numpy()
     if array.ndim == 4:
-        array = array[0]
+        array = array[-1]
     if array.ndim == 3 and array.shape[0] in (1, 3, 4):
         array = np.transpose(array[:3], (1, 2, 0))
     if array.max(initial=0) <= 1.5:
@@ -155,7 +156,7 @@ def draw_joint_graph(
     draw_series(panel, gt_history[:, JOINT_NAMES.index(joint_name)], top_box, -180.0, 180.0, (255, 190, 90), total_points)
     draw_series(panel, pred_history[:, JOINT_NAMES.index(joint_name)], top_box, -180.0, 180.0, (100, 230, 120), total_points)
 
-    # Error plot: absolute error is positive and uses a stable 0-90 degree scale.
+    # Error plot: absolute error is positive and uses a stable 0-90 scale in original dataset units.
     ex, ey, ew, eh = error_box
     put_text(panel, "0", (x + 13, ey + eh), 0.30, (145, 150, 160))
     put_text(panel, "90", (x + 6, ey + 7), 0.30, (145, 150, 160))
@@ -184,7 +185,7 @@ def render_frame(
     put_text(panel, "GT", (18, 68), 0.38, (255, 190, 90))
     put_text(panel, "Pred", (58, 68), 0.38, (100, 230, 120))
     put_text(panel, "|error|", (108, 68), 0.38, (80, 170, 255))
-    put_text(panel, "top: angle [-180,180] deg   bottom: abs error [0,90] deg", (180, 68), 0.34, (175, 180, 190))
+    put_text(panel, "Dataset units: position [-180,180], abs error [0,90]", (180, 68), 0.34, (175, 180, 190))
 
     graph_width = 210
     graph_height = 195
@@ -212,7 +213,7 @@ def save_episode_graph(
         axis.plot(times, errors[:, index], label="|error|", color="#f2994a", linewidth=1.1)
         axis.set_title(name)
         axis.set_xlabel("time [s]")
-        axis.set_ylabel("angle / abs error [deg]")
+        axis.set_ylabel("angle / abs error [dataset units]")
         axis.set_ylim(-180, 180)
         axis.grid(alpha=0.25)
     axes.flat[0].legend(loc="upper right", fontsize=8)
@@ -224,6 +225,8 @@ def save_episode_graph(
 
 def main() -> None:
     args = parse_args()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     if args.stride < 1:
         raise ValueError("--stride must be >= 1")
     if not (0.0 < args.eval_split <= 1.0):
@@ -376,7 +379,7 @@ def main() -> None:
 
                 row = {
                     "episode": episode,
-                    "frame_in_episode": local_frame,
+                    "frame_in_episode": int(sample["frame_index"]),
                     "dataset_index": dataset_index,
                     "timestamp": float(sample["timestamp"]),
                 }
@@ -400,7 +403,7 @@ def main() -> None:
                 )
                 video.write(frame)
                 if (local_frame + 1) % 25 == 0 or local_frame + 1 == len(indices):
-                    print(f"  {local_frame + 1}/{len(indices)} frames, MAE={running_errors.mean():.3f} deg", flush=True)
+                    print(f"  {local_frame + 1}/{len(indices)} frames, MAE={running_errors.mean():.3f} dataset units", flush=True)
 
             video.release()
             ep_gt = np.asarray(episode_gt)
@@ -413,9 +416,9 @@ def main() -> None:
                     "frames": len(indices),
                     "video": str(output_video),
                     "graph": str(output_graph),
-                    "mae_deg": float(np.abs(ep_error).mean()),
-                    "rmse_deg": float(np.sqrt(np.square(ep_error).mean())),
-                    "per_joint_mae_deg": {
+                    "mae": float(np.abs(ep_error).mean()),
+                    "rmse": float(np.sqrt(np.square(ep_error).mean())),
+                    "per_joint_mae": {
                         name: float(value) for name, value in zip(JOINT_NAMES, np.abs(ep_error).mean(axis=0))
                     },
                 }
@@ -425,6 +428,9 @@ def main() -> None:
     pred_all = np.asarray(all_pred)
     error_all = pred_all - gt_all
     summary = {
+        "seed": args.seed,
+        "units": "original dataset action units (not assumed degrees)",
+        "cycle_history_size": policy.config.cycle_history_size,
         "checkpoint": str(checkpoint),
         "dataset_repo_id": args.dataset_repo_id,
         "dataset_root": args.dataset_root,
@@ -433,12 +439,12 @@ def main() -> None:
         "action_mode": args.action_mode,
         "episodes": episodes,
         "frames": int(len(gt_all)),
-        "mae_deg": float(np.abs(error_all).mean()),
-        "rmse_deg": float(np.sqrt(np.square(error_all).mean())),
-        "per_joint_mae_deg": {
+        "mae": float(np.abs(error_all).mean()),
+        "rmse": float(np.sqrt(np.square(error_all).mean())),
+        "per_joint_mae": {
             name: float(value) for name, value in zip(JOINT_NAMES, np.abs(error_all).mean(axis=0))
         },
-        "per_joint_rmse_deg": {
+        "per_joint_rmse": {
             name: float(value) for name, value in zip(JOINT_NAMES, np.sqrt(np.square(error_all).mean(axis=0)))
         },
         "episode_summaries": episode_summaries,
