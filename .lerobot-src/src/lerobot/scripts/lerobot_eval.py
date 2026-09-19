@@ -20,12 +20,12 @@ Requires: pip install 'lerobot[evaluation]' plus the policy extra (e.g. lerobot[
 
 Usage examples:
 
-You want to evaluate a model from the hub (eg: https://huggingface.co/lerobot/diffusion_pusht)
+You want to evaluate a model from the hub (eg: https://huggingface.co/lerobot/act_pusht)
 for 10 episodes.
 
 ```
 lerobot-eval \
-    --policy.path=lerobot/diffusion_pusht \
+    --policy.path=lerobot/act_pusht \
     --env.type=pusht \
     --eval.batch_size=10 \
     --eval.n_episodes=10 \
@@ -36,7 +36,7 @@ lerobot-eval \
 OR, you want to evaluate a model checkpoint from the LeRobot training script for 10 episodes.
 ```
 lerobot-eval \
-    --policy.path=outputs/train/diffusion_pusht/checkpoints/005000/pretrained_model \
+    --policy.path=outputs/train/act_pusht/checkpoints/005000/pretrained_model \
     --env.type=pusht \
     --eval.batch_size=10 \
     --eval.n_episodes=10 \

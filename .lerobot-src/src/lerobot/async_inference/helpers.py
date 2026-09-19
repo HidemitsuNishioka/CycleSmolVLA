@@ -27,7 +27,6 @@ from lerobot.configs import PolicyFeature
 # NOTE: Configs need to be loaded for the client to be able to instantiate the policy config
 from lerobot.policies import (  # noqa: F401
     ACTConfig,
-    DiffusionConfig,
     PI0Config,
     PI05Config,
     SmolVLAConfig,

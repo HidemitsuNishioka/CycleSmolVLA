@@ -651,7 +651,7 @@ class VQBeTRgbEncoder(nn.Module):
 
     Includes the ability to normalize and crop the image first.
 
-    Same with DiffusionRgbEncoder from modeling_diffusion.py
+    Same with the vision encoder used by other image-based policies.
     """
 
     def __init__(self, config: VQBeTConfig):

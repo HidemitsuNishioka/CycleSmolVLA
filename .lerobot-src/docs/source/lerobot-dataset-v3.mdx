@@ -346,10 +346,10 @@ Those two storage layouts both subclass LeRobotDataset and can provide data load
 
 ```python
 from lerobot.datasets import LeRobotDatasetMetadata
-from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot_lancedb import LeRobotLanceDataset, LeRobotLanceVideoDataset
 
-cfg = DiffusionConfig(...)
+cfg = ACTConfig(...)
 meta = LeRobotDatasetMetadata(root=local_dataset_path)  # or use repo_id=... to load metadata from the Hub
 delta_timestamps = {...}
 

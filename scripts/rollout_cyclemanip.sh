@@ -2,7 +2,7 @@
 # Run the cyclemanip SmolVLA checkpoint on the physical SO-101 follower.
 #
 # The checkpoint is a LeRobot/SmolVLA checkpoint, so this intentionally uses
-# LeRobot's rollout path instead of the separate HAMLET/GR00T runner.
+# LeRobot's rollout path for the CycleManip policy.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

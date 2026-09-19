@@ -173,7 +173,7 @@ With this one declaration, `--parallelism.dp_shard=N` works out of the box for y
 
 ### Processor functions
 
-LeRobot uses `PolicyProcessorPipeline`s to normalize inputs and de-normalize outputs around your policy. For a concrete reference, see [`processor_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/processor_act.py) or [`processor_diffusion.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/diffusion/processor_diffusion.py).
+LeRobot uses `PolicyProcessorPipeline`s to normalize inputs and de-normalize outputs around your policy. For a concrete reference, see [`processor_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/processor_act.py) or another policy-specific `processor_*.py` implementation.
 
 Pay close attention here: processors are the most common reproducibility pain point. A mismatch in normalization mode (`IDENTITY` vs `MEAN_STD` vs `MIN_MAX` vs `QUANTILES`/`QUANTILE10`) or in which features get normalized will train and eval without erroring, yet silently wreck results. Make sure the modes match how the checkpoint was trained, that the required stats exist (e.g. `QUANTILES` needs `q01`/`q99`), and that the pre- and post-processors stay consistent.
 
@@ -391,20 +391,20 @@ Mirror an existing policy that's structurally similar to yours; the diff is smal
 
 Most policies need a heavy backbone (transformers, diffusers, a specific VLM SDK). Wherever one exists, prefer loading it e.g from `transformers` or `diffusers` rather than re-implementing the architecture in-tree.
 
-The convention is **two-step gating**: a `TYPE_CHECKING`-guarded import at module top, and a `require_package` runtime check in the constructor. [`modeling_diffusion.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/diffusion/modeling_diffusion.py) is the canonical reference:
+The convention is **two-step gating**: a `TYPE_CHECKING`-guarded import at module top, and a `require_package` runtime check in the constructor. A policy with an optional dependency is the canonical reference:
 
 ```python
 from typing import TYPE_CHECKING
-from lerobot.utils.import_utils import _diffusers_available, require_package
+from lerobot.utils.import_utils import require_package
 
-if TYPE_CHECKING or _diffusers_available:
-    from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+if TYPE_CHECKING:
+    from some_optional_package import SomeType
 else:
-    DDIMScheduler = None  # keeps the symbol bindable at import time
+    SomeType = None  # keeps the symbol bindable at import time
 
-class DiffusionPolicy(PreTrainedPolicy):
+class MyPolicy(PreTrainedPolicy):
     def __init__(self, config):
-        require_package("diffusers", extra="diffusion")
+        require_package("some_optional_package", extra="my_policy")
         super().__init__(config)
         ...
 ```
@@ -413,7 +413,7 @@ This way:
 
 - `import lerobot.policies` keeps working without the extra installed (the symbol is just bound to `None`).
 - Type checkers see the real symbol.
-- Instantiating the policy without the extra raises a clear `ImportError` pointing at `pip install 'lerobot[diffusion]'`.
+- Instantiating the policy without the extra raises a clear `ImportError` pointing at the appropriate optional extra.
 
 Add a matching extra to [`pyproject.toml`](https://github.com/huggingface/lerobot/blob/main/pyproject.toml) `[project.optional-dependencies]` and include it in the `all` extra so `pip install 'lerobot[all]'` keeps installing everything.
 

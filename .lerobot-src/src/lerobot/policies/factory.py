@@ -455,16 +455,16 @@ def _get_policy_cls_from_policy_name(name: str) -> type[PreTrainedPolicy]:
     config_cls = PreTrainedConfig.get_choice_class(name)
     config_cls_name = config_cls.__name__
 
-    model_name = config_cls_name.removesuffix("Config")  # e.g., DiffusionConfig -> Diffusion
+    model_name = config_cls_name.removesuffix("Config")  # e.g., ACTConfig -> ACT
     if model_name == config_cls_name:
         raise ValueError(
             f"The config class name '{config_cls_name}' does not follow the expected naming convention."
             f"Make sure it ends with 'Config'!"
         )
-    cls_name = model_name + "Policy"  # e.g., DiffusionConfig -> DiffusionPolicy
+    cls_name = model_name + "Policy"  # e.g., ACTConfig -> ACTPolicy
     module_path = config_cls.__module__.replace(
         "configuration_", "modeling_"
-    )  # e.g., configuration_diffusion -> modeling_diffusion
+    )  # e.g., configuration_act -> modeling_act
 
     try:
         module = importlib.import_module(module_path)
@@ -507,7 +507,7 @@ def _make_processors_from_policy_config(
     function_name = f"make_{policy_type}_pre_post_processors"
     module_path = config.__class__.__module__.replace(
         "configuration_", "processor_"
-    )  # e.g., configuration_diffusion -> processor_diffusion
+    )  # e.g., configuration_act -> processor_act
     logging.debug(
         f"Instantiating pre/post processors using function '{function_name}' from module '{module_path}'"
     )

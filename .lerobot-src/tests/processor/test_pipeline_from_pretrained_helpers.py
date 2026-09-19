@@ -128,7 +128,7 @@ def test_load_config_legacy_hub_policy_suggests_revision_aware_migration(tmp_pat
 
     with pytest.raises(ProcessorMigrationError) as exc_info:
         DataProcessorPipeline._load_config(
-            "lerobot/diffusion_pusht", "policy_preprocessor.json", {"revision": "legacy"}
+            "lerobot/act_pusht", "policy_preprocessor.json", {"revision": "legacy"}
         )
 
     assert "--revision legacy" in exc_info.value.migration_command

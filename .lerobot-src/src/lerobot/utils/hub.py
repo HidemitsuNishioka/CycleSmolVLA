@@ -140,7 +140,7 @@ class HubMixin:
 
         Args:
             pretrained_name_or_path (`str`, `Path`):
-                - Either the `repo_id` (string) of the object hosted on the Hub, e.g. `lerobot/diffusion_pusht`.
+                - Either the `repo_id` (string) of the object hosted on the Hub, e.g. `lerobot/act_pusht`.
                 - Or a path to a `directory` containing the object files saved using `.save_pretrained`,
                     e.g., `../path/to/my_model_directory/`.
             revision (`str`, *optional*):

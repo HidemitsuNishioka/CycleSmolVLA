@@ -240,9 +240,9 @@ def test_train_pipeline_config_trainable_config_returns_policy_when_set():
     ``trainable_config`` must return it."""
     from lerobot.configs.default import DatasetConfig
     from lerobot.configs.train import TrainPipelineConfig
-    from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
 
-    policy_cfg = DiffusionConfig(device="cpu")
+    policy_cfg = ACTConfig(device="cpu")
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="user/repo"),
         policy=policy_cfg,
@@ -257,11 +257,11 @@ def test_train_pipeline_config_from_pretrained_migrates_legacy_rabc_fields(tmp_p
     """Legacy top-level RA-BC fields should be migrated into ``sample_weighting``."""
     from lerobot.configs.default import DatasetConfig
     from lerobot.configs.train import TRAIN_CONFIG_NAME, TrainPipelineConfig
-    from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
 
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="user/repo"),
-        policy=DiffusionConfig(device="cpu"),
+        policy=ACTConfig(device="cpu"),
     )
     cfg._save_pretrained(tmp_path)
 
@@ -296,11 +296,11 @@ def test_train_pipeline_config_from_pretrained_strips_legacy_rabc_when_disabled(
     """Legacy RA-BC fields should be ignored when ``use_rabc`` was false."""
     from lerobot.configs.default import DatasetConfig
     from lerobot.configs.train import TRAIN_CONFIG_NAME, TrainPipelineConfig
-    from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
 
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id="user/repo"),
-        policy=DiffusionConfig(device="cpu"),
+        policy=ACTConfig(device="cpu"),
     )
     cfg._save_pretrained(tmp_path)
 

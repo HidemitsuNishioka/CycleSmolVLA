@@ -362,7 +362,7 @@ For policies trained on sim datasets (PushT, Aloha, LIBERO, MetaWorld, RoboCasa,
 
 ```bash
 lerobot-eval \
-  --policy.path=${HF_USER}/diffusion_pusht \
+  --policy.path=${HF_USER}/act_pusht \
   --env.type=pusht \
   --eval.n_episodes=50 \
   --eval.batch_size=10 \

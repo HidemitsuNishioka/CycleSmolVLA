@@ -59,9 +59,4 @@ if [[ -n "${SMOLVLA_POLICY_REPO_ID:-}" ]]; then
   args+=(--policy.repo_id="$SMOLVLA_POLICY_REPO_ID")
 fi
 
-if [[ "${LEROBOT_IMAGE:-}" == "so101-hamlet-thor:26.03" ]]; then
-  printf -v train_command '%q ' "${args[@]}"
-  run_lerobot bash -lc "if [[ ! -x /workspace/.venv/bin/python ]]; then python -m venv --system-site-packages /workspace/.venv; fi && /workspace/.venv/bin/python -m pip install --no-deps -q --upgrade 'huggingface-hub>=1.6,<2' 'datasets>=4.8,<5' 'transformers>=5.4,<5.6' 'peft>=0.18,<1' 'tokenizers>=0.22,<0.23.1' httpx httpcore h11 anyio sniffio certifi idna draccus num2words mergedeep docopt typing-inspect mypy-extensions toml && exec /workspace/.venv/bin/python -m lerobot.scripts.lerobot_train ${train_command#*lerobot.scripts.lerobot_train }"
-else
-  run_lerobot "${args[@]}"
-fi
+run_lerobot "${args[@]}"

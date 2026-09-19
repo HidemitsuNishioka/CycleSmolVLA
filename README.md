@@ -9,9 +9,8 @@ SO-101 の模倣学習を、Hugging Face 公式 LeRobot と SMOLVLA で実行す
 | LeRobot によるデバイス検出・設定・キャリブレーション | 使用対象 |
 | テレオペレーション・データ収録 | 使用対象 |
 | SMOLVLA の学習・offline評価・実機rollout | 現在の動作確認済みルート |
-| HAMLET / GR00T N1.6 | サブモジュールのみ。未検証・動作保証なし |
 
-このリポジトリでは、SMOLVLA 以外の学習方式（Diffusion Policy、MolmoAct2）の wrapper は削除しています。HAMLET は調査用に残していますが、まだ動く前提で扱わないでください。
+このリポジトリでは、SO-101向けのSMOLVLA/CycleManipワークフローを対象にしています。
 
 ## 必要な環境
 
@@ -26,17 +25,9 @@ Docker image は `huggingface/lerobot-gpu:latest` を使用します。LeRobot �
 
 ## Clone
 
-サブモジュールを含めて clone します。
-
 ```bash
-git clone --recurse-submodules <your-repository-url>
+git clone <your-repository-url>
 cd SO101
-```
-
-既に clone 済みの場合は、次でサブモジュールを取得できます。
-
-```bash
-git submodule update --init --recursive
 ```
 
 ## 初期設定
@@ -364,40 +355,6 @@ RTCでは推論遅延を制御ループから分離しています。ログのCa
 推論が1チャンク（このチェックポイントでは50ステップ、30 Hzで約1.67秒）を超える場合は
 キュー枯渇が起きるため、解像度・推論設定・FPSを調整してください。
 
-## HAMLET / GR00T N1.6
-
-`HAMLET-Isaac-GR00T/` は独立したサブモジュールです。現時点では動作確認できていないため、このルートの SMOLVLA 手順と混同しないでください。
-
-```bash
-git -C HAMLET-Isaac-GR00T status
-```
-
-HAMLET 側の手順や依存関係は、サブモジュール内の README とそのリポジトリの状態を確認してください。親リポジトリの `git` が参照するのはサブモジュールの commit だけで、サブモジュール内の未コミット変更は含まれません。
-
-### SO-101 データでHAMLETを学習する場合
-
-HAMLETサブモジュールは、標準ではRoboMME/RMBench向けのLeRobot v2系レイアウトを読み込みます。`data/so101_shake_cup` はLeRobot v3形式なので、付属スクリプトで変換してから学習します。元データは変更されず、変換先は `data/so101_shake_cup_gr00t` です。
-
-```bash
-# Jetson Thorでは、汎用PyPI版TorchではなくDockerを使う（推奨）
-MAX_STEPS=1000 bash scripts/train_hamlet_so101_docker.sh
-
-# Dockerを使わずホスト環境で実行する場合
-cd HAMLET-Isaac-GR00T
-~/.local/bin/uv sync
-~/.local/bin/uv pip install -e .
-cd ..
-
-# まず短い動作確認
-MAX_STEPS=1000 bash scripts/train_hamlet_so101.sh
-
-# 本学習の例
-MAX_STEPS=10000 SAVE_STEPS=1000 bash scripts/train_hamlet_so101.sh
-```
-
-`NUM_GPUS`、`GLOBAL_BATCH_SIZE`、`GRAD_ACCUM`、`OUTPUT_DIR` は環境変数で上書きできます。GR00T-N1.6のベースモデル取得にはHugging Faceへのアクセスが必要です。
-Thorでは `flash-attn` をビルドできないため、学習スクリプトはPyTorch SDPAを既定で使用します。FlashAttentionを使える環境だけ `USE_FLASH_ATTENTION=true` を指定してください。
-
 ## ディレクトリ構成
 
 ```text
@@ -407,8 +364,7 @@ SO101/
 │   ├── dataset.local.env    # ローカル上書き（Git管理外）
 │   └── robot.env            # SO-101 / カメラ設定
 ├── scripts/                 # Docker経由の実行 wrapper
-├── .lerobot-src/            # 公式 LeRobot の submodule
-├── HAMLET-Isaac-GR00T/      # 未検証の HAMLET submodule
+├── .lerobot-src/            # CycleManip対応LeRobotソース
 ├── data/                    # データセット（Git管理外）
 └── outputs/                 # checkpoint・評価結果（Git管理外）
 ```

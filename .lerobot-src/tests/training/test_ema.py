@@ -171,19 +171,21 @@ def make_train_config(root, output_dir, steps, ema_enable, ema_decay=None):
     from lerobot.policies.factory import make_policy_config
 
     policy_config = make_policy_config(
-        "diffusion",
+        "act",
         device="cpu",
         push_to_hub=False,
-        n_obs_steps=2,
-        horizon=8,
+        n_obs_steps=1,
+        chunk_size=8,
         n_action_steps=4,
-        drop_n_last_frames=0,
-        down_dims=(32, 64),
-        diffusion_step_embed_dim=32,
-        spatial_softmax_num_keypoints=8,
-        num_inference_steps=2,
         pretrained_backbone_weights=None,
-        use_group_norm=True,
+        dim_model=32,
+        n_heads=4,
+        dim_feedforward=64,
+        n_encoder_layers=1,
+        n_decoder_layers=1,
+        n_vae_encoder_layers=1,
+        latent_dim=4,
+        use_vae=False,
     )
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id=DUMMY_REPO_ID, root=str(root)),
@@ -211,9 +213,9 @@ def load_safetensors(path):
     return load_file(path)
 
 
-def test_train_diffusion_with_ema_checkpoint_and_resume(tmp_path):
+def test_train_with_ema_checkpoint_and_resume(tmp_path):
     pytest.importorskip("accelerate", reason="accelerate is required (install lerobot[training])")
-    pytest.importorskip("diffusers", reason="diffusers is required (install lerobot[diffusion])")
+    pytest.importorskip("diffusers", reason="diffusers is required for EMA support")
     from lerobot.scripts.lerobot_train import EMA_STATE_FILENAME, train
 
     root = make_dummy_dataset(tmp_path)
@@ -237,10 +239,10 @@ def test_train_diffusion_with_ema_checkpoint_and_resume(tmp_path):
     assert set(live_weights) == set(ema_weights)
     assert any(not torch.equal(live_weights[k], ema_weights[k]) for k in live_weights)
 
-    from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
+    from lerobot.policies.act.modeling_act import ACTPolicy
 
-    policy = DiffusionPolicy.from_pretrained(str(ema_model_dir))
-    assert isinstance(policy, DiffusionPolicy)
+    policy = ACTPolicy.from_pretrained(str(ema_model_dir))
+    assert isinstance(policy, ACTPolicy)
 
     # Resuming picks the shadow up where it left off instead of restarting it.
     resume_cfg = make_train_config(root, output_dir, steps=6, ema_enable=True)
@@ -257,7 +259,7 @@ def test_train_diffusion_with_ema_checkpoint_and_resume(tmp_path):
 
 def test_train_with_constant_ema_decay(tmp_path):
     pytest.importorskip("accelerate", reason="accelerate is required (install lerobot[training])")
-    pytest.importorskip("diffusers", reason="diffusers is required (install lerobot[diffusion])")
+    pytest.importorskip("diffusers", reason="diffusers is required for EMA support")
     from lerobot.scripts.lerobot_train import EMA_STATE_FILENAME, train
 
     root = make_dummy_dataset(tmp_path)
@@ -279,7 +281,7 @@ def test_train_with_constant_ema_decay(tmp_path):
 def test_train_with_ema_and_gradient_accumulation(tmp_path):
     """The shadow tracks optimizer steps, not micro-batches, under gradient accumulation."""
     pytest.importorskip("accelerate", reason="accelerate is required (install lerobot[training])")
-    pytest.importorskip("diffusers", reason="diffusers is required (install lerobot[diffusion])")
+    pytest.importorskip("diffusers", reason="diffusers is required for EMA support")
     from lerobot.scripts.lerobot_train import EMA_STATE_FILENAME, train
 
     root = make_dummy_dataset(tmp_path)
@@ -299,7 +301,7 @@ def test_train_with_ema_and_gradient_accumulation(tmp_path):
 
 def test_train_without_ema_writes_no_ema_files(tmp_path):
     pytest.importorskip("accelerate", reason="accelerate is required (install lerobot[training])")
-    pytest.importorskip("diffusers", reason="diffusers is required (install lerobot[diffusion])")
+    pytest.importorskip("diffusers", reason="diffusers is required for EMA support")
     from lerobot.scripts.lerobot_train import EMA_STATE_FILENAME, train
 
     root = make_dummy_dataset(tmp_path)

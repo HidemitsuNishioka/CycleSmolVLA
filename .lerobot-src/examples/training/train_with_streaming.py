@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""This script demonstrates how to train a Diffusion Policy on the PushT environment,
-using a dataset processed in streaming mode."""
+"""This script demonstrates how to train an ACT policy with streaming data."""
 
 from pathlib import Path
 

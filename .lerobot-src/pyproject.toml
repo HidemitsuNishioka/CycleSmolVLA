@@ -212,7 +212,6 @@ intelrealsense = [
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
 
 # Policies
-diffusion = ["lerobot[diffusers-dep]"]
 wallx = [
     "lerobot[transformers-dep]",
     "lerobot[peft-dep]",
@@ -318,7 +317,6 @@ all = [
     "lerobot[rebot]",
     "lerobot[kinematics]",
     "lerobot[intelrealsense]",
-    "lerobot[diffusion]",
     "lerobot[multi_task_dit]",
     "lerobot[wallx]",
     "lerobot[pi]",
