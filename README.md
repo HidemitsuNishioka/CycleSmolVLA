@@ -155,6 +155,14 @@ HF_TOKEN="hf_..."
 
 ## SMOLVLA 学習
 
+`Hidemitsu-Nishioka/so101_shake_cup_3times` を関節履歴300フレームで学習する設定:
+
+```bash
+SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env ./scripts/train_smolvla.sh
+```
+
+データは `data/so101_shake_cup_3times` に取得済みです。30 fpsで現在を含む連続300フレーム（オフセット -299〜0）を入力し、エピソード冒頭の不足分はマスクします。画像履歴は6フレーム、行動チャンクは50フレームです。episode 0〜7で20,000ステップ学習し、8〜9から最大100サンプルで2,000ステップごとに検証損失を計算します。出力先は `outputs/train/smolvla_shake_cup_3times_cycle300` です。同じ出力先での重複起動は避けてください。
+
 現時点で動作確認済みの学習コマンドです。
 
 ```bash
