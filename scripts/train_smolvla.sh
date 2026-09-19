@@ -16,7 +16,9 @@ require_value POLICY_DEVICE
 mkdir -p "$ROOT_DIR/$(dirname "$SMOLVLA_OUTPUT_DIR")"
 
 args=(
-  lerobot-train
+  python
+  -m
+  lerobot.scripts.lerobot_train
   --policy.path="$SMOLVLA_BASE_PATH"
   --dataset.repo_id="$DATASET_REPO_ID"
   --dataset.root="$DATASET_ROOT"
@@ -27,6 +29,10 @@ args=(
   --policy.use_amp="$SMOLVLA_USE_AMP"
   --policy.chunk_size="$SMOLVLA_CHUNK_SIZE"
   --policy.n_action_steps="$SMOLVLA_N_ACTION_STEPS"
+  --policy.cycle_enabled="$SMOLVLA_CYCLE_ENABLED"
+  --policy.cycle_history_size="$SMOLVLA_CYCLE_HISTORY_SIZE"
+  --policy.cycle_image_history_size="$SMOLVLA_CYCLE_IMAGE_HISTORY_SIZE"
+  --policy.cycle_progress_loss_weight="$SMOLVLA_CYCLE_PROGRESS_LOSS_WEIGHT"
   --policy.freeze_vision_encoder="$SMOLVLA_FREEZE_VISION_ENCODER"
   --policy.train_expert_only="$SMOLVLA_TRAIN_EXPERT_ONLY"
   --policy.train_state_proj="$SMOLVLA_TRAIN_STATE_PROJ"
@@ -38,6 +44,8 @@ args=(
   --save_freq="$SMOLVLA_SAVE_FREQ"
   --log_freq="$SMOLVLA_LOG_FREQ"
   --num_workers="$SMOLVLA_NUM_WORKERS"
+  --eval_steps="${SMOLVLA_EVAL_STEPS:-0}"
+  --max_eval_samples="${SMOLVLA_MAX_EVAL_SAMPLES:-0}"
   --wandb.enable="$WANDB_ENABLE"
   --wandb.project="$WANDB_PROJECT"
   --wandb.mode="$WANDB_MODE"

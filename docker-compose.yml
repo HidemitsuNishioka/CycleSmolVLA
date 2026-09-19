@@ -35,6 +35,7 @@ services:
       TORCH_HOME: /workspace/.cache/torch
       TORCHINDUCTOR_CACHE_DIR: /workspace/.cache/torch/inductor
       TRITON_CACHE_DIR: /workspace/.cache/triton
+      PYTHONPATH: /workspace/.venv/lib/python3.12/site-packages:/workspace/.local/lib/python3.12/site-packages:/opt/venv/lib/python3.12/site-packages:/workspace/.lerobot-src/src
       # Keep W&B's runtime files in the user-writable project output tree.
       WANDB_DIR: /workspace/outputs/wandb
       WANDB_CACHE_DIR: /workspace/outputs/wandb/cache

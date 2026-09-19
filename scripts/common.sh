@@ -23,6 +23,11 @@ if [[ -f "$ROOT_DIR/config/dataset.local.env" ]]; then
   source "$ROOT_DIR/config/dataset.local.env"
 fi
 
+# Optional experiment settings override defaults without copying credentials.
+if [[ -n "${SO101_DATASET_CONFIG:-}" ]]; then
+  source "$SO101_DATASET_CONFIG"
+fi
+
 # Pass W&B authentication to the container without putting the secret in a
 # command-line argument. Keep the value out of logs and printed diagnostics.
 if [[ -n "${WANDB_API_KEY:-}" ]]; then

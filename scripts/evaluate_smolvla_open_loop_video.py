@@ -23,8 +23,10 @@ import torch
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.smolvla.cyclemanip import cycle_progress_targets
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
 
@@ -51,8 +53,13 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated episode IDs. Empty means the last eval_split fraction.",
     )
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--max-frames-per-episode", type=int, default=0)
+    parser.add_argument(
+        "--n-action-steps", type=int, default=None,
+        help="Number of queued actions used per inference in rollout mode (1 means replan every frame).",
+    )
     parser.add_argument(
         "--action-mode",
         choices=("fresh", "rollout"),
@@ -79,7 +86,7 @@ def selected_episode_ids(dataset: LeRobotDataset, args: argparse.Namespace) -> l
 def as_rgb_uint8(image: torch.Tensor) -> np.ndarray:
     array = image.detach().cpu().float().numpy()
     if array.ndim == 4:
-        array = array[0]
+        array = array[-1]
     if array.ndim == 3 and array.shape[0] in (1, 3, 4):
         array = np.transpose(array[:3], (1, 2, 0))
     if array.max(initial=0) <= 1.5:
@@ -153,7 +160,7 @@ def draw_joint_graph(
     draw_series(panel, gt_history[:, JOINT_NAMES.index(joint_name)], top_box, -180.0, 180.0, (255, 190, 90), total_points)
     draw_series(panel, pred_history[:, JOINT_NAMES.index(joint_name)], top_box, -180.0, 180.0, (100, 230, 120), total_points)
 
-    # Error plot: absolute error is positive and uses a stable 0-90 degree scale.
+    # Error plot: absolute error is positive and uses a stable 0-90 scale in original dataset units.
     ex, ey, ew, eh = error_box
     put_text(panel, "0", (x + 13, ey + eh), 0.30, (145, 150, 160))
     put_text(panel, "90", (x + 6, ey + 7), 0.30, (145, 150, 160))
@@ -182,7 +189,7 @@ def render_frame(
     put_text(panel, "GT", (18, 68), 0.38, (255, 190, 90))
     put_text(panel, "Pred", (58, 68), 0.38, (100, 230, 120))
     put_text(panel, "|error|", (108, 68), 0.38, (80, 170, 255))
-    put_text(panel, "top: angle [-180,180] deg   bottom: abs error [0,90] deg", (180, 68), 0.34, (175, 180, 190))
+    put_text(panel, "Dataset units: position [-180,180], abs error [0,90]", (180, 68), 0.34, (175, 180, 190))
 
     graph_width = 210
     graph_height = 195
@@ -210,7 +217,7 @@ def save_episode_graph(
         axis.plot(times, errors[:, index], label="|error|", color="#f2994a", linewidth=1.1)
         axis.set_title(name)
         axis.set_xlabel("time [s]")
-        axis.set_ylabel("angle / abs error [deg]")
+        axis.set_ylabel("angle / abs error [dataset units]")
         axis.set_ylim(-180, 180)
         axis.grid(alpha=0.25)
     axes.flat[0].legend(loc="upper right", fontsize=8)
@@ -222,6 +229,8 @@ def save_episode_graph(
 
 def main() -> None:
     args = parse_args()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     if args.stride < 1:
         raise ValueError("--stride must be >= 1")
     if not (0.0 < args.eval_split <= 1.0):
@@ -242,10 +251,36 @@ def main() -> None:
 
     print(f"Loading official SmolVLAPolicy from {checkpoint}")
     policy = SmolVLAPolicy.from_pretrained(str(checkpoint)).to(device).eval()
+    if args.n_action_steps is not None:
+        if not 1 <= args.n_action_steps <= policy.config.chunk_size:
+            raise ValueError("--n-action-steps must be between 1 and chunk_size")
+        policy.config.n_action_steps = args.n_action_steps
+        policy.reset()
+    if policy.config.rtc_config is not None and policy.config.rtc_config.enabled:
+        raise ValueError("This evaluator requires RTC disabled in the policy config")
+    rename_map = {}
+    if policy.config.image_features:
+        policy_image_key = next(iter(policy.config.image_features))
+        if image_key != policy_image_key:
+            rename_map[image_key] = policy_image_key
+    delta_timestamps = resolve_delta_timestamps(policy.config, dataset.meta, rename_map)
+    if delta_timestamps is not None:
+        dataset = LeRobotDataset(
+            args.dataset_repo_id,
+            root=args.dataset_root,
+            delta_timestamps=delta_timestamps,
+        )
+        print(
+            f"Cycle history enabled: {getattr(policy.config, 'cycle_enabled', False)}; "
+            f"delta features: {sorted(delta_timestamps)}"
+        )
     preprocessor, postprocessor = make_pre_post_processors(
         policy.config,
         str(checkpoint),
-        preprocessor_overrides={"device_processor": {"device": str(device)}},
+        preprocessor_overrides={
+            "device_processor": {"device": str(device)},
+            "rename_observations_processor": {"rename_map": rename_map},
+        },
     )
 
     csv_path = output_dir / "action_comparison.csv"
@@ -257,9 +292,13 @@ def main() -> None:
         *[f"gt_{name}" for name in JOINT_NAMES],
         *[f"pred_{name}" for name in JOINT_NAMES],
         *[f"abs_error_{name}" for name in JOINT_NAMES],
+        "cycle_progress_target",
+        "cycle_progress_prediction",
     ]
     all_gt: list[np.ndarray] = []
     all_pred: list[np.ndarray] = []
+    all_progress_targets: list[int] = []
+    all_progress_predictions: list[int] = []
     episode_summaries = []
 
     with csv_path.open("w", newline="") as csv_file:
@@ -302,8 +341,33 @@ def main() -> None:
                     "observation.state": sample["observation.state"],
                     "task": sample["task"],
                 }
+                for metadata_key in (
+                    f"{image_key}_is_pad",
+                    f"{image_key}_padding_mask",
+                    "observation.state_is_pad",
+                    "frame_index",
+                    "episode_index",
+                ):
+                    if metadata_key in sample:
+                        raw_observation[metadata_key] = sample[metadata_key]
                 processed = preprocessor(raw_observation)
                 with torch.inference_mode():
+                    progress_target = None
+                    progress_prediction = None
+                    progress_logits = policy.predict_cycle_progress(processed)
+                    if progress_logits is not None:
+                        progress_target = int(
+                            cycle_progress_targets(
+                                torch.as_tensor(sample["frame_index"]),
+                                torch.as_tensor(sample["episode_index"]),
+                                policy.config.cycle_episode_lengths,
+                                policy.config.cycle_progress_bins,
+                                policy.config.cycle_progress_fallback_length,
+                            )[0]
+                        )
+                        progress_prediction = int(progress_logits.argmax(dim=-1)[0].item())
+                        all_progress_targets.append(progress_target)
+                        all_progress_predictions.append(progress_prediction)
                     if args.action_mode == "fresh":
                         action_chunk = policy.predict_action_chunk(processed)
                         predicted = action_chunk[:, 0]
@@ -311,7 +375,10 @@ def main() -> None:
                         predicted = policy.select_action(processed)
                     predicted = postprocessor(predicted)
 
-                gt = sample["action"].detach().float().cpu().reshape(-1).numpy()
+                gt_tensor = sample["action"]
+                if gt_tensor.ndim > 1:
+                    gt_tensor = gt_tensor[0]
+                gt = gt_tensor.detach().float().cpu().reshape(-1).numpy()
                 pred = predicted.detach().float().cpu().reshape(-1).numpy()
                 if gt.shape[0] != len(JOINT_NAMES) or pred.shape[0] != len(JOINT_NAMES):
                     raise ValueError(f"Expected 6 action values, got GT={gt.shape} prediction={pred.shape}")
@@ -323,13 +390,15 @@ def main() -> None:
 
                 row = {
                     "episode": episode,
-                    "frame_in_episode": local_frame,
+                    "frame_in_episode": int(sample["frame_index"]),
                     "dataset_index": dataset_index,
                     "timestamp": float(sample["timestamp"]),
                 }
                 row.update({f"gt_{name}": float(value) for name, value in zip(JOINT_NAMES, gt)})
                 row.update({f"pred_{name}": float(value) for name, value in zip(JOINT_NAMES, pred)})
                 row.update({f"abs_error_{name}": float(value) for name, value in zip(JOINT_NAMES, error)})
+                row["cycle_progress_target"] = progress_target
+                row["cycle_progress_prediction"] = progress_prediction
                 writer.writerow(row)
 
                 running_errors = np.abs(np.asarray(episode_pred) - np.asarray(episode_gt))
@@ -345,7 +414,7 @@ def main() -> None:
                 )
                 video.write(frame)
                 if (local_frame + 1) % 25 == 0 or local_frame + 1 == len(indices):
-                    print(f"  {local_frame + 1}/{len(indices)} frames, MAE={running_errors.mean():.3f} deg", flush=True)
+                    print(f"  {local_frame + 1}/{len(indices)} frames, MAE={running_errors.mean():.3f} dataset units", flush=True)
 
             video.release()
             ep_gt = np.asarray(episode_gt)
@@ -358,9 +427,9 @@ def main() -> None:
                     "frames": len(indices),
                     "video": str(output_video),
                     "graph": str(output_graph),
-                    "mae_deg": float(np.abs(ep_error).mean()),
-                    "rmse_deg": float(np.sqrt(np.square(ep_error).mean())),
-                    "per_joint_mae_deg": {
+                    "mae": float(np.abs(ep_error).mean()),
+                    "rmse": float(np.sqrt(np.square(ep_error).mean())),
+                    "per_joint_mae": {
                         name: float(value) for name, value in zip(JOINT_NAMES, np.abs(ep_error).mean(axis=0))
                     },
                 }
@@ -370,23 +439,33 @@ def main() -> None:
     pred_all = np.asarray(all_pred)
     error_all = pred_all - gt_all
     summary = {
+        "seed": args.seed,
+        "units": "original dataset action units (not assumed degrees)",
+        "cycle_history_size": policy.config.cycle_history_size,
         "checkpoint": str(checkpoint),
         "dataset_repo_id": args.dataset_repo_id,
         "dataset_root": args.dataset_root,
         "dataset_fps": dataset.fps,
         "camera_feature": image_key,
         "action_mode": args.action_mode,
+        "n_action_steps": policy.config.n_action_steps,
+        "rtc_enabled": policy._rtc_enabled(),
         "episodes": episodes,
         "frames": int(len(gt_all)),
-        "mae_deg": float(np.abs(error_all).mean()),
-        "rmse_deg": float(np.sqrt(np.square(error_all).mean())),
-        "per_joint_mae_deg": {
+        "mae": float(np.abs(error_all).mean()),
+        "rmse": float(np.sqrt(np.square(error_all).mean())),
+        "per_joint_mae": {
             name: float(value) for name, value in zip(JOINT_NAMES, np.abs(error_all).mean(axis=0))
         },
-        "per_joint_rmse_deg": {
+        "per_joint_rmse": {
             name: float(value) for name, value in zip(JOINT_NAMES, np.sqrt(np.square(error_all).mean(axis=0)))
         },
         "episode_summaries": episode_summaries,
+        "cycle_progress_accuracy": (
+            float(np.mean(np.asarray(all_progress_targets) == np.asarray(all_progress_predictions)))
+            if all_progress_targets
+            else None
+        ),
         "csv": str(csv_path),
     }
     summary_path = output_dir / "summary.json"
