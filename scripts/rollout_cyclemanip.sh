@@ -13,7 +13,9 @@ require_value FOLLOWER_PORT
 require_value FOLLOWER_ID
 require_value ROLLOUT_DEVICE
 
-CHECKPOINT_INPUT="${CYCLEMANIP_CHECKPOINT:-$ROOT_DIR/outputs/train/cyclemanip/002000}"
+# Prefer an explicit CycleManip checkpoint.  Do not inherit the generic
+# SMOLVLA_POLICY_PATH because it may point at a different trained task.
+CHECKPOINT_INPUT="${CYCLEMANIP_CHECKPOINT:-$ROOT_DIR/outputs/train/smolvla_shake_cup_3times_cycle300/016000}"
 if [[ "$CHECKPOINT_INPUT" = /* ]]; then
   CHECKPOINT_ROOT="$CHECKPOINT_INPUT"
 else
@@ -34,19 +36,25 @@ grep -Eq '"type"[[:space:]]*:[[:space:]]*"smolvla"' "$CHECKPOINT_DIR/config.json
   die "checkpoint is not a SmolVLA checkpoint: $CHECKPOINT_DIR"
 }
 
-TASK="${CYCLEMANIP_TASK:-Shake the cup.}"
+TASK="${CYCLEMANIP_TASK:-${DATASET_TASK:-Shake the cup three times.}}"
 # Prefer a CycleManip-specific override, then reuse the existing SMOLVLA
 # rollout setting from config/dataset.local.env, and finally fall back to 10s.
 DURATION="${CYCLEMANIP_DURATION:-${SMOLVLA_ROLLOUT_DURATION:-10}}"
 FPS="${CYCLEMANIP_FPS:-${DATASET_FPS:-30}}"
 DEVICE="${CYCLEMANIP_DEVICE:-$ROLLOUT_DEVICE}"
-MAX_RELATIVE_TARGET="${CYCLEMANIP_MAX_RELATIVE_TARGET:-5.0}"
+MAX_RELATIVE_TARGET="${CYCLEMANIP_MAX_RELATIVE_TARGET:-20.0}"
 # Keep motor control decoupled from the comparatively slow VLA forward pass.
 # The CycleManip checkpoint produces 50-step chunks, so guided RTC can keep a
 # 30 Hz command stream alive while the next chunk is inferred in the background.
 INFERENCE_TYPE="${CYCLEMANIP_INFERENCE_TYPE:-rtc}"
 RTC_EXECUTION_HORIZON="${CYCLEMANIP_RTC_EXECUTION_HORIZON:-10}"
 RTC_GUIDANCE_WEIGHT="${CYCLEMANIP_RTC_GUIDANCE_WEIGHT:-10.0}"
+POLICY_ARGS=()
+if [[ -n "${CYCLEMANIP_N_ACTION_STEPS:-}" ]]; then
+  [[ "$INFERENCE_TYPE" == "sync" ]] || die "CYCLEMANIP_N_ACTION_STEPS requires CYCLEMANIP_INFERENCE_TYPE=sync"
+  [[ "$CYCLEMANIP_N_ACTION_STEPS" =~ ^[1-9][0-9]*$ ]] || die "CYCLEMANIP_N_ACTION_STEPS must be a positive integer"
+  POLICY_ARGS+=(--policy.n_action_steps="$CYCLEMANIP_N_ACTION_STEPS")
+fi
 CAMERAS="$(camera_config)"
 
 if [[ -n "${CYCLEMANIP_RENAME_MAP:-}" ]]; then
@@ -63,6 +71,8 @@ echo "Device:    $DEVICE"
 echo "Duration:  ${DURATION}s"
 echo "Max delta: ${MAX_RELATIVE_TARGET} deg/step"
 echo "Inference: ${INFERENCE_TYPE}"
+echo "Keyboard:  R = reset history/actions and restart from the current pose (timer restarts)"
+echo "Actions per inference (sync): ${CYCLEMANIP_N_ACTION_STEPS:-checkpoint default}"
 echo "Follower:  $FOLLOWER_PORT ($FOLLOWER_ID)"
 echo "Camera:    ${CAMERA_TOP_DEVICE:-}${CAMERA_WRIST_DEVICE:+, $CAMERA_WRIST_DEVICE}"
 
@@ -98,8 +108,10 @@ run_lerobot bash -c '
   exec "$runtime_python" -m lerobot.scripts.lerobot_rollout "$@"
 ' rollout \
   --strategy.type=base \
+  --strategy.keyboard_restart=true \
   "${INFERENCE_ARGS[@]}" \
   --policy.path="$CONTAINER_CHECKPOINT" \
+  "${POLICY_ARGS[@]}" \
   --rename_map="$RENAME_MAP" \
   --device="$DEVICE" \
   --robot.type=so101_follower \

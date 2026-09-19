@@ -57,6 +57,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--max-frames-per-episode", type=int, default=0)
     parser.add_argument(
+        "--n-action-steps", type=int, default=None,
+        help="Number of queued actions used per inference in rollout mode (1 means replan every frame).",
+    )
+    parser.add_argument(
         "--action-mode",
         choices=("fresh", "rollout"),
         default="fresh",
@@ -247,6 +251,13 @@ def main() -> None:
 
     print(f"Loading official SmolVLAPolicy from {checkpoint}")
     policy = SmolVLAPolicy.from_pretrained(str(checkpoint)).to(device).eval()
+    if args.n_action_steps is not None:
+        if not 1 <= args.n_action_steps <= policy.config.chunk_size:
+            raise ValueError("--n-action-steps must be between 1 and chunk_size")
+        policy.config.n_action_steps = args.n_action_steps
+        policy.reset()
+    if policy.config.rtc_config is not None and policy.config.rtc_config.enabled:
+        raise ValueError("This evaluator requires RTC disabled in the policy config")
     rename_map = {}
     if policy.config.image_features:
         policy_image_key = next(iter(policy.config.image_features))
@@ -437,6 +448,8 @@ def main() -> None:
         "dataset_fps": dataset.fps,
         "camera_feature": image_key,
         "action_mode": args.action_mode,
+        "n_action_steps": policy.config.n_action_steps,
+        "rtc_enabled": policy._rtc_enabled(),
         "episodes": episodes,
         "frames": int(len(gt_all)),
         "mae": float(np.abs(error_all).mean()),

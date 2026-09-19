@@ -31,6 +31,7 @@ def check(cfg: RolloutConfig):
                     raise ValueError(f"CycleManip weight missing: {key}")
     print(f"Source: {modeling_smolvla.__file__}")
     print(f"CycleManip: {cfg.policy.cycle_enabled}; device: {cfg.device}")
+    print(f"Inference: {cfg.inference.type}; actions per inference: {cfg.policy.n_action_steps}")
     print(f"Image offsets: {cfg.policy.image_observation_delta_indices}")
     print(f"State offsets: {cfg.policy.state_observation_delta_indices}")
     print(f"Robot port exists: {Path(cfg.robot.port).exists()} ({cfg.robot.port})")

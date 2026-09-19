@@ -1,7 +1,3 @@
 [submodule "HAMLET-Isaac-GR00T"]
 	path = HAMLET-Isaac-GR00T
 	url = https://github.com/myungkyuKoo/HAMLET-Isaac-GR00T.git
-
-[submodule ".lerobot-src"]
-	path = .lerobot-src
-	url = https://github.com/huggingface/lerobot.git

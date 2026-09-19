@@ -155,6 +155,14 @@ HF_TOKEN="hf_..."
 
 ## SMOLVLA 学習
 
+ローカルの `data/so101_5eps` を CycleManip 対応 SmolVLA で学習する設定:
+
+```bash
+SO101_DATASET_CONFIG=config/smolvla_so101_5eps_cycle300.env ./scripts/train_smolvla.sh
+```
+
+このデータはディレクトリ名にかかわらず10エピソード・4,499フレームで、タスクは `Pick up the object and place it in the target area` です。episode 0〜7を学習、8〜9を検証に使います。状態履歴300フレーム、画像履歴6フレーム、行動チャンク50フレーム、batch size 4で20,000ステップ学習します。2,000ステップごとに最大100サンプルで検証し、ディスク使用量を抑えるためチェックポイントは5,000ステップごとに保存します。出力先は `outputs/train/smolvla_so101_5eps_cycle300` です。W&Bは `lerobot-so101` プロジェクトへのオンライン送信を有効にしています。`config/dataset.local.env` に `WANDB_API_KEY` を設定してください（未設定の場合、共通スクリプトがW&Bを無効化します）。Hubへのアップロードは無効です。同じ出力先で重複起動しないでください。
+
 `Hidemitsu-Nishioka/so101_shake_cup_3times` を関節履歴300フレームで学習する設定:
 
 ```bash
@@ -196,6 +204,7 @@ SMOLVLA_JOB_NAME="smolvla_smoke"
 ## SMOLVLA offline 評価
 
 評価対象はデータセットの最後の `DATASET_EVAL_SPLIT`（デフォルト20%）です。ロボットには action を送信しません。
+評価ランチャーも実機rolloutと同じPython環境を選び、`.lerobot-src/src` を優先して読み込みます。
 
 ```bash
 ./scripts/evaluate_smolvla_open_loop.sh
@@ -209,6 +218,39 @@ SMOLVLA_OPEN_LOOP_MAX_FRAMES=100 \
 ./scripts/evaluate_smolvla_open_loop.sh
 ```
 
+`cycle300/016000` のep8・ep9全体を評価する例です。既定の `fresh` は毎フレーム新しい
+行動チャンクを推論し、その先頭を比較します。実機のRTCキューは使用しません。
+
+```bash
+SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
+SMOLVLA_OPEN_LOOP_EPISODES=8,9 \
+SMOLVLA_OPEN_LOOP_OUTPUT_DIR=outputs/eval/smolvla_cycle300_016000_ep8_ep9/fresh \
+./scripts/evaluate_smolvla_open_loop.sh
+```
+
+実機と同じRTCエンジンの評価には、LeRobotのPython環境内で次を実行します。記録した観測を
+30 Hzで供給し、実際の非同期推論・行動キューを通した出力を比較します。推論前後の動画処理は
+計測区間から除外します。各時刻の観測は記録データなので、実機の追従やタスク成功の評価ではありません。
+出力待ちフレームは誤差集計から除外し、待ち時間・キュー不足・±10の制限適用前後の誤差も保存します。
+
+```bash
+python scripts/evaluate_smolvla_rtc_open_loop.py \
+  --checkpoint outputs/train/smolvla_shake_cup_3times_cycle300/016000 \
+  --dataset-root data/so101_shake_cup_3times \
+  --episodes 8,9 --device cuda --max-relative-target 10 \
+  --output-dir outputs/eval/smolvla_cycle300_016000_ep8_ep9/rtc
+```
+
+同じ評価スクリプトで `--disable-guidance` を付けると、モデル内部のRTC補正を完全に迂回します
+（非同期キュー・遅延補償は残ります）。`--inference-type sync --n-action-steps 1` では、
+実機用の同期推論エンジンを使い、RTCのキュー・遅延補償も無効にして毎回予測し直します。
+`--n-action-steps 50` なら補正なしで50手を順に使用する比較になります。同期推論が30 Hzに
+間に合わない場合も記録フレームは省略せず、実測の処理Hzを `summary.json` に記録します。
+
+チャンクの先頭と後続の精度を切り分けるには `scripts/diagnose_smolvla_action_chunks.py` に
+`--checkpoint`、`--dataset-root`、`--output-dir` を指定します。ep8・ep9を既定で30フレーム
+ごとにサンプルし、各予測を対応する未来時刻のGTと比較します。エピソード端のパディングは除外します。
+
 ## 実機 rollout
 
 CycleManip対応SmolVLAは `scripts/rollout_cyclemanip.sh` から起動します。
@@ -216,6 +258,24 @@ Docker内で学習に使った `/workspace/.venv/bin/python`（存在しない�
 `.lerobot-src/src` の修正済みコードを優先して読み込みます。
 既定ではRTCを使い、行動チャンクの推論をバックグラウンドで実行します。これにより、
 推論の待ち時間で実機制御ループが止まらず、30 Hzのコマンド周期を維持できます。
+
+実行中のターミナルにフォーカスして **Rキー** を押すと、観測履歴・行動キュー・補間中の
+行動をリセットし、現在の姿勢から推論を再開します。Enterは不要です。RTCの実行中の
+推論が完了してからリセットするため、古い予測が再開後に混ざりません。実行時間の上限も
+Rを押して再開した時点から数え直します。アームやコップの物理的な配置はそのままなので、
+次の周回を開始できる配置で操作してください。終了は従来どおりCtrl+Cです。
+このキー操作はランチャーが `--strategy.keyboard_restart=true` で有効にし、入力は実行中の
+ターミナルだけから受け付けます。`--interactive=true` のコマンド入力モードでは無効です。
+
+RTCを完全に外して、毎回チャンクの先頭1手だけを使う比較は次で起動できます。
+`sync` にするだけではチェックポイント既定の50手キューが残るため、1手の指定も必要です。
+同期の1手推論では制御周期がモデルの推論速度に制約されます。
+
+```bash
+SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
+CYCLEMANIP_INFERENCE_TYPE=sync CYCLEMANIP_N_ACTION_STEPS=1 \
+./scripts/rollout_cyclemanip.sh
+```
 
 まずFollowerとカメラを接続し、`config/robot.env` の `FOLLOWER_PORT`、`FOLLOWER_ID`、
 `CAMERA_TOP_DEVICE` を実際の機器に合わせてください。Followerは同じIDでキャリブレーション済みのものを使います。
@@ -228,7 +288,8 @@ ls -l /dev/serial/by-id/ /dev/ttyACM* /dev/video*
 この環境で保存済みのCycleManipチェックポイントを使う例です。
 
 ```bash
-CYCLEMANIP_CHECKPOINT="outputs/train/cyclemanip/002000" \
+SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
+CYCLEMANIP_CHECKPOINT="outputs/train/smolvla_shake_cup_3times_cycle300/016000" \
 CYCLEMANIP_DURATION="10" \
 ./scripts/rollout_cyclemanip.sh
 ```
@@ -237,6 +298,35 @@ CycleManipの有効・無効、履歴長、行動チャンク長はチェック�
 `SMOLVLA_CYCLE_ENABLED` は学習用設定なので、rollout時の切り替えには使いません。
 `last` は最新の保存先に追従します。固定したモデルを使う場合は `006000` などを指定してください。
 
+CycleManipのモデル実装は `KainaJetson:~/SO101/` の学習コードに合わせています。
+履歴Transformerは4ヘッド・PreNorm、融合層の活性化はSiLUです。これらは重みの形状に
+現れないため、重みが読み込めても別の実装では同じ予測になりません。
+
+CycleManipの履歴は推論回数ではなく制御周期ごとに保存します。RTCの `cycle300` では
+30 Hzの関節状態300フレームと、`[-299, -150, -75, -2, -1, 0]` フレームの画像6枚を
+モデルに渡します。開始時の不足履歴は最初のフレームで埋め、学習時と同じ `_is_pad` マスクで
+無効にします。実行リセット時には履歴も消去します。
+RTCではCPU上に画像を保存し、推論時に選んだ6枚だけをGPUへ転送します。
+同期の1手推論では観測取得も遅くなるため、300フレームが必ず10秒に相当するわけではありません。
+
+2026-09-19の実装照合より前に作成した評価は、学習側とは異なるモデル構造・画像履歴での
+結果でした。チェックポイントの学習品質を判断する数値としては使用しないでください。
+照合後の診断・評価は `outputs/eval/learning_cause_20260919/` に保存しています。
+
+記録済みデータを実機の入力形式で再生し、オープンループ評価との入力一致を検証する場合は、
+LeRobotのPython環境内で次を実行します。ロボットやカメラへの接続は行いません。
+`--compare-actions` は同じノイズでの行動出力差も記録します。画像のCPU/GPU変換の丸め差が
+あるため、行動出力の完全一致を保証する検査ではありません。
+
+```bash
+python scripts/check_smolvla_input_parity.py \
+  --checkpoint outputs/train/smolvla_shake_cup_3times_cycle300/016000 \
+  --dataset-root data/so101_shake_cup_3times \
+  --device cuda --compare-actions
+```
+
+検証結果は `outputs/eval/smolvla_input_parity.json` に保存されます。
+
 ロボット・カメラに接続せず、Docker内のimport、CLI設定、チェックポイントのファイルと
 CycleManipの重みキーを検査できます。機器が存在しない場合も、その状態を表示して検査を完了します。
 モデル全体の推論や実機動作のテストではありません。
@@ -244,7 +334,7 @@ CycleManipの重みキーを検査できます。機器が存在しない場合�
 ```bash
 ./scripts/rollout_smolvla.sh \
   --check \
-  --checkpoint outputs/train/cyclemanip/002000
+  --checkpoint outputs/train/smolvla_shake_cup_3times_cycle300/016000
 ```
 
 実機を動かす場合は、アームの周囲を空け、学習データに対応する初期姿勢・物体配置にして実行します。
@@ -254,7 +344,8 @@ CycleManipの重みキーを検査できます。機器が存在しない場合�
 ./scripts/rollout_cyclemanip.sh
 
 # 指定チェックポイントと実行秒数を明示する場合
-CYCLEMANIP_CHECKPOINT="outputs/train/cyclemanip/002000" \
+SO101_DATASET_CONFIG=config/smolvla_shake_cup_3times_300.env \
+CYCLEMANIP_CHECKPOINT="outputs/train/smolvla_shake_cup_3times_cycle300/016000" \
 CYCLEMANIP_DURATION="10" \
 ./scripts/rollout_cyclemanip.sh
 ```

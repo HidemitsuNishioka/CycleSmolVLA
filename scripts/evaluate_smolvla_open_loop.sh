@@ -23,7 +23,12 @@ echo "Checkpoint: $SMOLVLA_POLICY_PATH"
 echo "Action mode: $ACTION_MODE"
 echo "Output: $OUTPUT_DIR"
 
-run_lerobot python /workspace/scripts/evaluate_smolvla_open_loop_video.py \
+run_lerobot bash -c '
+  export PYTHONPATH="/workspace/.lerobot-src/src:${PYTHONPATH:-}"
+  runtime_python=python
+  if [[ -x /workspace/.venv/bin/python ]]; then runtime_python=/workspace/.venv/bin/python; fi
+  exec "$runtime_python" /workspace/scripts/evaluate_smolvla_open_loop_video.py "$@"
+' evaluate \
   --dataset-repo-id="$DATASET_REPO_ID" \
   --dataset-root="/workspace/$DATASET_ROOT" \
   --checkpoint="/workspace/$SMOLVLA_POLICY_PATH" \
