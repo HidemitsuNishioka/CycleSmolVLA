@@ -745,6 +745,36 @@ class VLAFlowMatching(nn.Module):
         embs = []
         pad_masks = []
         att_masks = []
+        # Missing camera streams are represented by fully masked images.  They
+        # must remain in the prefix so the trained token layout is unchanged,
+        # but running the vision encoder for them is wasted work: their
+        # embeddings are ignored by the attention padding mask.  In the KAINA
+        # single-camera setup this used to run the vision encoder 12 extra
+        # times per request (two empty cameras x six history frames).
+        image_embeddings: list[Tensor | None] = [None] * len(images)
+        emb_template: Tensor | None = None
+        valid_indices = [
+            index
+            for index, mask in enumerate(img_masks)
+            if bool(torch.any(mask).item())
+        ]
+        if valid_indices:
+            valid_images = [images[index] for index in valid_indices]
+            same_shape = all(image.shape == valid_images[0].shape for image in valid_images)
+            if same_shape and len(valid_images) > 1:
+                merged_images = torch.cat(valid_images, dim=0)
+                merged_embeddings = self.vlm_with_expert.embed_image(merged_images)
+                batch_size = valid_images[0].shape[0]
+                for offset, index in enumerate(valid_indices):
+                    start = offset * batch_size
+                    image_embeddings[index] = merged_embeddings[start : start + batch_size]
+            else:
+                for index in valid_indices:
+                    image_embeddings[index] = self.vlm_with_expert.embed_image(images[index])
+            emb_template = next(
+                embedding for embedding in image_embeddings if embedding is not None
+            )
+
         for _img_idx, (
             img,
             img_mask,
@@ -764,8 +794,15 @@ class VLAFlowMatching(nn.Module):
                 embs.append(image_start_token)
                 pad_masks.append(image_start_mask)
 
-            img_emb = self.vlm_with_expert.embed_image(img)
-            img_emb = img_emb
+            img_emb = image_embeddings[_img_idx]
+            if img_emb is None:
+                if emb_template is None:
+                    # This should only be reachable for a malformed batch
+                    # where every image is masked. Keep the old behavior so
+                    # the failure mode remains in the model implementation.
+                    img_emb = self.vlm_with_expert.embed_image(img)
+                else:
+                    img_emb = torch.zeros_like(emb_template)
 
             # Normalize image embeddings
             img_emb_dim = img_emb.shape[-1]
