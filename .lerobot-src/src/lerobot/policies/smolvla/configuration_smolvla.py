@@ -40,6 +40,14 @@ class SmolVLAConfig(PreTrainedConfig):
     cycle_progress_fallback_length: int = 450
     cycle_episode_lengths: dict[str, int] = field(default_factory=dict)
 
+    # Paper-inspired Arm-Hand Feature Enhancement (arXiv:2511.00139, Sec. 3.4).
+    # Indices must explicitly partition the unpadded action space.
+    arm_hand_enabled: bool = False
+    arm_hand_hidden_dim: int = 256
+    arm_hand_loss_weight: float = 0.1
+    arm_action_indices: list[int] = field(default_factory=list)
+    hand_action_indices: list[int] = field(default_factory=list)
+
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
@@ -53,7 +61,7 @@ class SmolVLAConfig(PreTrainedConfig):
     max_action_dim: int = 32
 
     # Image preprocessing
-    resize_imgs_with_padding: tuple[int, int] = (512, 512)
+    resize_imgs_with_padding: tuple[int, int] | None = (512, 512)
 
     # Add empty images. Used by smolvla_aloha_sim which adds the empty
     # left and right wrist cameras in addition to the top camera.
@@ -139,6 +147,14 @@ class SmolVLAConfig(PreTrainedConfig):
             )
 
     def validate_features(self) -> None:
+        if self.arm_hand_enabled:
+            if self.arm_hand_hidden_dim <= 0 or self.arm_hand_loss_weight < 0:
+                raise ValueError("Invalid arm-hand hidden dimension or loss weight")
+            indices = self.arm_action_indices + self.hand_action_indices
+            if not self.arm_action_indices or not self.hand_action_indices:
+                raise ValueError("Arm-hand enhancement requires explicit arm and hand indices")
+            if sorted(indices) != list(range(self.action_feature.shape[0])):
+                raise ValueError("Arm and hand indices must partition the unpadded action dimensions")
         for i in range(self.empty_cameras):
             key = f"{OBS_IMAGES}.empty_camera_{i}"
             empty_camera = PolicyFeature(

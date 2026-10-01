@@ -76,6 +76,7 @@ from ..utils import (
     populate_queues,
 )
 from .configuration_smolvla import SmolVLAConfig
+from .arm_hand import ArmHandFeatures, masked_action_mean
 from .cyclemanip import CycleHistoryEncoder, cycle_progress_targets
 from .smolvlm_with_expert import SmolVLMWithExpertModel
 
@@ -330,7 +331,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
         loss_dict = {}
-        losses, progress_logits = self.model.forward(
+        losses, progress_logits, arm_hand_losses = self.model.forward(
             images,
             img_masks,
             lang_tokens,
@@ -342,6 +343,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
             cycle_state=cycle_state,
             cycle_state_is_pad=cycle_state_is_pad,
             return_auxiliary=True,
+            return_arm_hand_losses=True,
         )
         original_action_dim = self.config.action_feature.shape[0]
         losses = losses[:, :, :original_action_dim]
@@ -370,6 +372,11 @@ class SmolVLAPolicy(PreTrainedPolicy):
             loss_dict["cycle_progress_accuracy"] = (
                 (progress_logits.argmax(dim=-1) == progress_targets).float().mean().item()
             )
+
+        for name, auxiliary_loss in arm_hand_losses.items():
+            group_loss = masked_action_mean(auxiliary_loss, actions_is_pad)
+            per_sample_loss = per_sample_loss + self.config.arm_hand_loss_weight * group_loss
+            loss_dict[f"arm_hand_{name}_loss"] = group_loss.mean().item()
 
         if reduction == "none":
             # Return per-sample losses (B,) by averaging over valid (time, action) entries
@@ -678,6 +685,14 @@ class VLAFlowMatching(nn.Module):
         self.action_in_proj = nn.Linear(self.config.max_action_dim, self.vlm_with_expert.expert_hidden_size)
         self.action_out_proj = nn.Linear(self.vlm_with_expert.expert_hidden_size, self.config.max_action_dim)
 
+        self.arm_hand_features = None
+        if self.config.arm_hand_enabled:
+            self.arm_hand_features = ArmHandFeatures(
+                self.vlm_with_expert.expert_hidden_size, self.config.arm_hand_hidden_dim,
+                self.config.max_action_dim, len(self.config.arm_action_indices),
+                len(self.config.hand_action_indices),
+            )
+
         self.action_time_mlp_in = nn.Linear(
             self.vlm_with_expert.expert_hidden_size * 2, self.vlm_with_expert.expert_hidden_size
         )
@@ -717,6 +732,13 @@ class VLAFlowMatching(nn.Module):
 
     def _rtc_enabled(self):
         return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
+    def project_actions(self, shared: Tensor) -> tuple[Tensor, tuple[Tensor, Tensor] | None]:
+        velocity = self.action_out_proj(shared)
+        if self.arm_hand_features is None:
+            return velocity, None
+        residual, arm, hand = self.arm_hand_features(shared)
+        return velocity + residual, (arm, hand)
 
     def set_requires_grad(self):
         for params in self.state_proj.parameters():
@@ -934,7 +956,8 @@ class VLAFlowMatching(nn.Module):
         cycle_state=None,
         cycle_state_is_pad=None,
         return_auxiliary: bool = False,
-    ) -> Tensor | tuple[Tensor, Tensor | None]:
+        return_arm_hand_losses: bool = False,
+    ) -> Tensor | tuple:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
@@ -972,9 +995,18 @@ class VLAFlowMatching(nn.Module):
         suffix_out = suffix_out[:, -self.config.chunk_size :]
         # Original openpi code, upcast attention output
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
+        v_t, limb_velocities = self.project_actions(suffix_out)
         losses = F.mse_loss(u_t, v_t, reduction="none")
         progress_logits = self.cycle_progress_head(cycle_embedding) if cycle_embedding is not None else None
+        arm_hand_losses = {}
+        if limb_velocities is not None:
+            arm, hand = limb_velocities
+            arm_hand_losses = {
+                "arm": F.mse_loss(arm, u_t[..., self.config.arm_action_indices], reduction="none"),
+                "hand": F.mse_loss(hand, u_t[..., self.config.hand_action_indices], reduction="none"),
+            }
+        if return_arm_hand_losses:
+            return losses, progress_logits, arm_hand_losses
         if return_auxiliary:
             return losses, progress_logits
         return losses
@@ -1077,5 +1109,5 @@ class VLAFlowMatching(nn.Module):
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.chunk_size :]
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
+        v_t, _ = self.project_actions(suffix_out)
         return v_t

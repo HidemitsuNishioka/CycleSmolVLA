@@ -200,19 +200,46 @@ class SmolVLMWithExpertModel(nn.Module):
             self.vlm.eval()
 
     def embed_image(self, image: torch.Tensor):
-        patch_attention_mask = None
-        # Get sequence from the vision encoder
-        image_hidden_states = (
-            self.get_vlm_model()
-            .vision_model(
-                pixel_values=image.to(dtype=self.get_vlm_model().vision_model.dtype),
-                patch_attention_mask=patch_attention_mask,
+        """Encode native-size images and spatially pack rectangular patch grids."""
+        vlm = self.get_vlm_model()
+        vision = vlm.vision_model
+        pixels = image.to(dtype=vision.dtype)
+        patch_size = vision.embeddings.patch_size
+        height, width = pixels.shape[-2:]
+        if height % patch_size or width % patch_size:
+            raise ValueError(
+                f"Image dimensions {height}x{width} must be divisible by VLM patch size {patch_size}"
             )
-            .last_hidden_state
+        grid_height, grid_width = height // patch_size, width // patch_size
+        patch_attention_mask = torch.ones(
+            (pixels.shape[0], grid_height, grid_width), dtype=torch.bool, device=pixels.device
         )
-        # Modality projection & resampling
-        image_hidden_states = self.get_vlm_model().connector(image_hidden_states)
-        return image_hidden_states
+        encoded = vision(pixel_values=pixels, patch_attention_mask=patch_attention_mask)
+        return self.project_image_embeddings(encoded.last_hidden_state, grid_height, grid_width)
+
+    def project_image_embeddings(self, hidden_states: torch.Tensor, grid_height: int, grid_width: int):
+        """Apply SmolVLM's learned pixel shuffle for square or rectangular grids."""
+        connector = self.get_vlm_model().connector
+        scale = connector.scale_factor
+        if grid_height * grid_width != hidden_states.shape[1]:
+            raise ValueError("Patch grid does not match the vision encoder output")
+        if grid_height == grid_width and grid_height % scale == 0:
+            return connector(hidden_states)
+
+        batch, _, channels = hidden_states.shape
+        grid = hidden_states.reshape(batch, grid_height, grid_width, channels)
+        pad_height = (-grid_height) % scale
+        pad_width = (-grid_width) % scale
+        if pad_height or pad_width:
+            grid = torch.nn.functional.pad(grid, (0, 0, 0, pad_width, 0, pad_height))
+        height, width = grid.shape[1:3]
+        shuffled = grid.reshape(batch, height, width // scale, channels * scale)
+        shuffled = shuffled.permute(0, 2, 1, 3)
+        shuffled = shuffled.reshape(batch, width // scale, height // scale, channels * scale**2)
+        shuffled = shuffled.permute(0, 2, 1, 3).reshape(
+            batch, (height // scale) * (width // scale), channels * scale**2
+        )
+        return connector.modality_projection(shuffled)
 
     def embed_language_tokens(self, tokens: torch.Tensor):
         return self.get_vlm_model().text_model.get_input_embeddings()(tokens)
